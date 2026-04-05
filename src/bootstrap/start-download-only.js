@@ -6,8 +6,8 @@ export async function main(ns) {
   }
 
   const owner = "ctoppan";
-  const repo = "bitburner";
-  const branch = "master";
+  const repo = "bitburner-automation";	
+  const branch = "main";
   const srcPrefix = "src/";
 
   const treeApi = `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`;

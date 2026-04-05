@@ -4,7 +4,7 @@ export async function main(ns) {
     throw new Error("Run the script from home");
   }
 
-  const repoBase = "https://raw.githubusercontent.com/ctoppan/bitburner/master/src";
+  const repoBase = "https://raw.githubusercontent.com/ctoppan/bitburner-automation/main/src";
   const downloader = "bootstrap/start-download-only.js";
   const nextScript = "/bootstrap/initHacking.js";
   const url = `${repoBase}/${downloader}?ts=${Date.now()}`;
