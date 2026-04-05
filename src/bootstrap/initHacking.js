@@ -47,7 +47,7 @@ export async function main(ns) {
     } else {
         if (ns.fileExists(crimeManager, "home")) {
             ns.tprint(`[${ts()}] Gang not unlocked, starting ${crimeManager}`);
-            const crimePid = ns.run(crimeManager, 1);
+            const crimePid = ns.run(crimeManager, 1, "karma");
             if (crimePid === 0) {
                 ns.tprint(`[${ts()}] WARNING: Failed to start ${crimeManager}`);
             }

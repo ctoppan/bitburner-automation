@@ -1,159 +1,227 @@
-const settings = {
-  keys: {
-    crimesStop: 'BB_CRIMES_STOP',
-  },
-  crimes: [
-    'shoplift',
-    'rob store',
-    'mug',
-    'larceny',
-    'deal drugs',
-    'bond forgery',
-    'traffick arms',
-    'homicide',
-    'grand theft auto',
-    'kidnap',
-    'assassinate',
-    'heist',
-  ],
-  refreshMs: 10 * 60 * 1000,
-  defaultKarmaTarget: -54000,
-}
-
-function getItem(key) {
-  const item = localStorage.getItem(key)
-  return item ? JSON.parse(item) : undefined
-}
-
-function setItem(key, value) {
-  localStorage.setItem(key, JSON.stringify(value))
-}
-
-function localeHHMMSS(ms = 0) {
-  if (!ms) ms = Date.now()
-  return new Date(ms).toLocaleTimeString()
-}
-
-function formatNumber(n) {
-  return Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(n)
-}
-
-function getCrimeData(ns) {
-  const crimes = {}
-
-  for (const crime of settings.crimes) {
-    const chance = ns.singularity.getCrimeChance(crime)
-    const stats = ns.singularity.getCrimeStats(crime)
-    crimes[crime] = { chance, stats }
-  }
-
-  return crimes
-}
-
-function pickBestMoneyCrime(crimes) {
-  const crimesList = Object.keys(crimes).sort((a, b) => crimes[b].chance - crimes[a].chance)
-
-  const solidChanceCrimes = crimesList.filter((crime) => crimes[crime].chance >= 0.8)
-  const candidateCrimes = solidChanceCrimes.length >= 3 ? solidChanceCrimes : crimesList.slice(0, 4)
-
-  let bestCrime = 'shoplift'
-  let bestWeight = -1
-
-  for (const crime of candidateCrimes) {
-    const info = crimes[crime]
-    const moneyPerMs = info.stats.money / Math.max(info.stats.time, 1)
-    const weight = info.chance * moneyPerMs
-
-    if (weight > bestWeight) {
-      bestWeight = weight
-      bestCrime = crime
-    }
-  }
-
-  return bestCrime
-}
-
-function pickBestKarmaCrime(crimes) {
-  let bestCrime = 'homicide'
-  let bestWeight = -1
-
-  for (const crime of Object.keys(crimes)) {
-    const info = crimes[crime]
-    const karma = Math.abs(info.stats.karma || 0)
-    const karmaPerMs = karma / Math.max(info.stats.time, 1)
-    const weight = info.chance * karmaPerMs
-
-    if (weight > bestWeight) {
-      bestWeight = weight
-      bestCrime = crime
-    }
-  }
-
-  return bestCrime
-}
-
-/** @param {NS} ns */
+/** @param {NS} ns **/
 export async function main(ns) {
-  const mode = String(ns.args[0] || 'money').toLowerCase()
-  const karmaTarget = Number(ns.args[1] ?? settings.defaultKarmaTarget)
+    ns.disableLog("sleep");
+    ns.clearLog();
 
-  ns.disableLog('sleep')
-  ns.tprint(`[${localeHHMMSS()}] Starting crimeManager.js in mode: ${mode}`)
+    const mode = String(ns.args[0] ?? "auto").toLowerCase();
+    const pollMs = Math.max(1000, Number(ns.args[1] ?? 1500));
 
-  if (ns.getHostname() !== 'home') {
-    throw new Error('Run the script from home')
-  }
+    const crimeStats = [
+        "shoplift",
+        "rob store",
+        "mug",
+        "larceny",
+        "deal drugs",
+        "bond forgery",
+        "traffick illegal arms",
+        "homicide",
+        "grand theft auto",
+        "kidnap",
+        "assassination",
+        "heist",
+    ];
 
-  const validModes = new Set(['money', 'karma', 'karma-until'])
-  if (!validModes.has(mode)) {
-    ns.tprint('Usage:')
-    ns.tprint('run /crime/crimeManager.js money')
-    ns.tprint('run /crime/crimeManager.js karma')
-    ns.tprint('run /crime/crimeManager.js karma-until -54000')
-    return
-  }
+    ns.tprint(`[${ts()}] Starting crimeManager.js in mode: ${mode}`);
 
-  setItem(settings.keys.crimesStop, false)
-
-  let nextRefresh = 0
-  let crimes = null
-
-  while (true) {
-    const stop = getItem(settings.keys.crimesStop)
-    if (stop) {
-      ns.tprint(`[${localeHHMMSS()}] Stop flag detected, exiting crimeManager.js`)
-      break
+    if (!hasSingularityCrime(ns)) {
+        ns.tprint(`[${ts()}] WARNING: Singularity crime functions unavailable. Exiting.`);
+        return;
     }
 
-    const currentKarma = ns.heart.break()
+    let lastCrime = "";
+    let lastLog = 0;
 
-    if (mode === 'karma-until' && currentKarma <= karmaTarget) {
-      ns.tprint(
-        `[${localeHHMMSS()}] Karma target reached: ${formatNumber(currentKarma)} <= ${formatNumber(karmaTarget)}`
-      )
-      break
+    while (true) {
+        try {
+            const selectedMode = resolveMode(ns, mode);
+            const bestCrime = pickBestCrime(ns, crimeStats, selectedMode);
+
+            if (!bestCrime) {
+                ns.print(`[crimeManager] No viable crime found for mode=${selectedMode}`);
+                await ns.sleep(pollMs);
+                continue;
+            }
+
+            const currentWork = getCurrentWorkSafe(ns);
+            const alreadyDoingCrime =
+                currentWork &&
+                currentWork.type === "CRIME" &&
+                normalizeCrimeName(currentWork.crimeType) === normalizeCrimeName(bestCrime.name);
+
+            const now = Date.now();
+            const shouldLog =
+                bestCrime.name !== lastCrime ||
+                now - lastLog > 15000;
+
+            if (shouldLog) {
+                ns.tprint(
+                    `[${ts()}] Crime: ${bestCrime.name} | chance=${(bestCrime.chance * 100).toFixed(1)}% | ` +
+                    `money=${ns.formatNumber(bestCrime.moneyPerSecond, 2)} | karma=${bestCrime.karmaPerSecond.toFixed(2)} | ` +
+                    `mode=${selectedMode}`
+                );
+                lastCrime = bestCrime.name;
+                lastLog = now;
+            }
+
+            if (!alreadyDoingCrime) {
+                tryCommitCrime(ns, bestCrime.name);
+            }
+
+            await ns.sleep(pollMs);
+        } catch (err) {
+            ns.tprint(`[${ts()}] ERROR: ${String(err)}`);
+            await ns.sleep(pollMs);
+        }
+    }
+}
+
+function hasSingularityCrime(ns) {
+    try {
+        return !!ns.singularity &&
+            typeof ns.singularity.commitCrime === "function" &&
+            typeof ns.singularity.getCrimeChance === "function" &&
+            typeof ns.singularity.getCrimeStats === "function";
+    } catch {
+        return false;
+    }
+}
+
+function resolveMode(ns, requestedMode) {
+    if (requestedMode === "money" || requestedMode === "karma") {
+        return requestedMode;
     }
 
-    while (ns.singularity.isBusy()) {
-      await ns.sleep(100)
+    const player = safeGetPlayer(ns);
+    const karma = safeHeartBreak(ns);
+
+    const hasGang = safeInGang(ns);
+    if (hasGang) {
+        return "money";
     }
 
-    if (!crimes || Date.now() >= nextRefresh) {
-      crimes = getCrimeData(ns)
-      nextRefresh = Date.now() + settings.refreshMs
+    if (karma > -54000) {
+        return "karma";
     }
 
-    const crime = mode === 'money' ? pickBestMoneyCrime(crimes) : pickBestKarmaCrime(crimes)
-    const info = crimes[crime]
+    if ((player?.money ?? 0) < 5e6) {
+        return "money";
+    }
 
-    ns.tprint(
-      `[${localeHHMMSS()}] Crime: ${crime} | chance=${(info.chance * 100).toFixed(1)}% | ` +
-        `money=${formatNumber(info.stats.money)} | karma=${info.stats.karma}`
-    )
+    return "karma";
+}
 
-    const crimeTime = ns.singularity.commitCrime(crime)
-    await ns.sleep(Math.max(crimeTime + 20, 100))
-  }
+function pickBestCrime(ns, crimes, mode) {
+    const scored = [];
 
-  setItem(settings.keys.crimesStop, false)
+    for (const crime of crimes) {
+        const stats = getCrimeStatsSafe(ns, crime);
+        if (!stats) continue;
+
+        const chance = clamp01(getCrimeChanceSafe(ns, crime));
+        if (chance <= 0) continue;
+
+        const time = Math.max(1, Number(stats.time ?? 0));
+        const money = Number(stats.money ?? 0);
+        const karma = Math.abs(Number(stats.karma ?? 0));
+
+        const moneyPerSecond = (money * chance) / (time / 1000);
+        const karmaPerSecond = (karma * chance) / (time / 1000);
+
+        let score = 0;
+
+        if (mode === "money") {
+            if (chance < 0.6) continue;
+            score = moneyPerSecond;
+        } else {
+            if (chance < 0.4) continue;
+            score = karmaPerSecond;
+        }
+
+        scored.push({
+            name: crime,
+            chance,
+            moneyPerSecond,
+            karmaPerSecond,
+            score,
+        });
+    }
+
+    scored.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        if (b.chance !== a.chance) return b.chance - a.chance;
+        return a.name.localeCompare(b.name);
+    });
+
+    return scored[0] || null;
+}
+
+function tryCommitCrime(ns, crime) {
+    try {
+        ns.singularity.commitCrime(crime, false);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function getCrimeStatsSafe(ns, crime) {
+    try {
+        return ns.singularity.getCrimeStats(crime);
+    } catch {
+        return null;
+    }
+}
+
+function getCrimeChanceSafe(ns, crime) {
+    try {
+        return ns.singularity.getCrimeChance(crime);
+    } catch {
+        return 0;
+    }
+}
+
+function getCurrentWorkSafe(ns) {
+    try {
+        if (!ns.singularity?.getCurrentWork) return null;
+        return ns.singularity.getCurrentWork();
+    } catch {
+        return null;
+    }
+}
+
+function safeGetPlayer(ns) {
+    try {
+        return ns.getPlayer();
+    } catch {
+        return null;
+    }
+}
+
+function safeHeartBreak(ns) {
+    try {
+        return ns.heart.break();
+    } catch {
+        return 0;
+    }
+}
+
+function safeInGang(ns) {
+    try {
+        return !!ns.gang && ns.gang.inGang();
+    } catch {
+        return false;
+    }
+}
+
+function normalizeCrimeName(name) {
+    return String(name || "").trim().toLowerCase();
+}
+
+function clamp01(n) {
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(0, Math.min(1, n));
+}
+
+function ts() {
+    return new Date().toLocaleTimeString();
 }
