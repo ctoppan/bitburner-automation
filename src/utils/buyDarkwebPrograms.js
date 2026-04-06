@@ -11,8 +11,7 @@ export async function main(ns) {
     const result = buyDarkwebPrograms(ns, programs);
 
     ns.tprint(`Singularity available: ${result.hasSingularity}`);
-    ns.tprint(`TOR owned: ${result.hasTor}`);
-    ns.tprint(`TOR purchased now: ${result.boughtTor}`);
+    ns.tprint(`TOR purchased/already owned: ${result.torReady}`);
     ns.tprint(`Bought programs: ${result.bought.join(", ") || "none"}`);
     ns.tprint(`Missing after run: ${result.missing.join(", ") || "none"}`);
 }
@@ -20,8 +19,7 @@ export async function main(ns) {
 export function buyDarkwebPrograms(ns, programs = []) {
     const result = {
         hasSingularity: false,
-        hasTor: false,
-        boughtTor: false,
+        torReady: false,
         bought: [],
         missing: [],
     };
@@ -41,20 +39,13 @@ export function buyDarkwebPrograms(ns, programs = []) {
     }
 
     try {
-        const player = ns.getPlayer();
-        result.hasTor = !!player.tor;
-
-        if (!result.hasTor) {
-            result.boughtTor = !!ns.singularity.purchaseTor();
-            result.hasTor = !!ns.getPlayer().tor;
-        }
-    } catch {}
-
-    if (!result.hasTor) {
-        result.missing = programs.filter((p) => !ns.fileExists(p, "home"));
-        return result;
+        // purchaseTor() is safe to call repeatedly
+        result.torReady = !!ns.singularity.purchaseTor();
+    } catch {
+        result.torReady = false;
     }
 
+    // Even if the TOR state check is quirky, still try to buy the programs.
     for (const program of programs) {
         try {
             if (ns.fileExists(program, "home")) {
@@ -62,6 +53,7 @@ export function buyDarkwebPrograms(ns, programs = []) {
             }
 
             const ok = ns.singularity.purchaseProgram(program);
+
             if (ok || ns.fileExists(program, "home")) {
                 result.bought.push(program);
             }
