@@ -1,3 +1,18 @@
+function getItem(key) {
+    try {
+        const item = localStorage.getItem(key);
+        return item ? JSON.parse(item) : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+function setItem(key, value) {
+    try {
+        localStorage.setItem(key, JSON.stringify(value));
+    } catch {}
+}
+
 /** @param {NS} ns **/
 export async function main(ns) {
     ns.disableLog("sleep");
@@ -5,6 +20,7 @@ export async function main(ns) {
 
     const mode = String(ns.args[0] ?? "auto").toLowerCase();
     const pollMs = Math.max(1000, Number(ns.args[1] ?? 1500));
+    const stopKey = "BB_CRIMES_STOP";
 
     const crimeStats = [
         "shoplift",
@@ -21,6 +37,7 @@ export async function main(ns) {
         "heist",
     ];
 
+    setItem(stopKey, false);
     ns.tprint(`[${ts()}] Starting crimeManager.js in mode: ${mode}`);
 
     if (!hasSingularityCrime(ns)) {
@@ -33,6 +50,16 @@ export async function main(ns) {
 
     while (true) {
         try {
+            if (shouldStop(ns, stopKey)) {
+                ns.tprint(`[${ts()}] Stop requested. Exiting crime manager.`);
+                return;
+            }
+
+            if (safeInGang(ns)) {
+                ns.tprint(`[${ts()}] Gang detected. Exiting crime manager.`);
+                return;
+            }
+
             const selectedMode = resolveMode(ns, mode);
             const bestCrime = pickBestCrime(ns, crimeStats, selectedMode);
 
@@ -49,11 +76,11 @@ export async function main(ns) {
                 normalizeCrimeName(currentWork.crimeType) === normalizeCrimeName(bestCrime.name);
 
             const now = Date.now();
-            const shouldLog =
+            const shouldLogNow =
                 bestCrime.name !== lastCrime ||
                 now - lastLog > 15000;
 
-            if (shouldLog) {
+            if (shouldLogNow) {
                 ns.tprint(
                     `[${ts()}] Crime: ${bestCrime.name} | chance=${(bestCrime.chance * 100).toFixed(1)}% | ` +
                     `money=${ns.formatNumber(bestCrime.moneyPerSecond, 2)} | karma=${bestCrime.karmaPerSecond.toFixed(2)} | ` +
@@ -75,6 +102,13 @@ export async function main(ns) {
     }
 }
 
+function shouldStop(ns, stopKey) {
+    const stopFlag = getItem(stopKey);
+    if (stopFlag) return true;
+
+    return false;
+}
+
 function hasSingularityCrime(ns) {
     try {
         return !!ns.singularity &&
@@ -94,8 +128,7 @@ function resolveMode(ns, requestedMode) {
     const player = safeGetPlayer(ns);
     const karma = safeHeartBreak(ns);
 
-    const hasGang = safeInGang(ns);
-    if (hasGang) {
+    if (safeInGang(ns)) {
         return "money";
     }
 
