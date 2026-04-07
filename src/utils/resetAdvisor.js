@@ -7,13 +7,19 @@ export async function main(ns) {
   const maxFutureBuysToSim = Math.max(1, Number(ns.args[4] ?? 5))
   const augPriceMultiplier = Number(ns.args[5] ?? 1.9)
   const gangKarmaTarget = Number(ns.args[6] ?? -54000)
-  const gangHoldWindow = Math.max(0, Number(ns.args[7] ?? 15000))
+  const gangKarmaGuard = Math.max(0, Number(ns.args[7] ?? 15000))
 
   const player = ns.getPlayer()
   const factions = player.factions || []
   const hasDaedalus = factions.includes("Daedalus")
   const homeMoney = ns.getServerMoneyAvailable("home")
   const hack = ns.getHackingLevel()
+  const karma = safeHeartBreak(ns)
+  const inGang = safeInGang(ns)
+  const closeToGangUnlock =
+    !inGang &&
+    karma > gangKarmaTarget &&
+    karma <= gangKarmaTarget + gangKarmaGuard
 
   const lines = []
   lines.push("=== Reset Advisor ===")
@@ -25,6 +31,11 @@ export async function main(ns) {
   lines.push(`Daedalus joined:   ${hasDaedalus ? "yes" : "no"}`)
   lines.push(`Min pending target ${minPending}`)
   lines.push(`Price multiplier:  x${augPriceMultiplier.toFixed(2)}`)
+  lines.push(`In gang:           ${inGang ? "yes" : "no"}`)
+  lines.push(`Karma:             ${ns.formatNumber(karma, 3)}`)
+  lines.push(`Gang target:       ${ns.formatNumber(gangKarmaTarget, 3)}`)
+  lines.push(`Gang guard:        ${ns.formatNumber(gangKarmaGuard, 3)}`)
+  lines.push(`Close to gang:     ${closeToGangUnlock ? "yes" : "no"}`)
 
   const augSummary = getAugSummary(ns)
   lines.push("")
@@ -34,19 +45,6 @@ export async function main(ns) {
   lines.push(`  pending queued:  ${augSummary.pending.length}`)
   lines.push(`  pending cost:    ${fmtMoney(ns, augSummary.pendingCost)}`)
   lines.push(`  red pill queued: ${augSummary.hasRedPillPending ? "yes" : "no"}`)
-
-  const inGang = safeInGang(ns)
-  const karma = safeHeartBreak(ns)
-  const karmaRemaining = Math.max(0, karma - gangKarmaTarget)
-  const gangHoldActive = !inGang && karma > gangKarmaTarget && karmaRemaining <= gangHoldWindow
-
-  lines.push("")
-  lines.push("Gang unlock status:")
-  lines.push(`  in gang:         ${inGang ? "yes" : "no"}`)
-  lines.push(`  karma:           ${ns.formatNumber(karma, 6)}`)
-  lines.push(`  target karma:    ${ns.formatNumber(gangKarmaTarget, 6)}`)
-  lines.push(`  karma remaining: ${ns.formatNumber(karmaRemaining, 6)}`)
-  lines.push(`  hold active:     ${gangHoldActive ? "yes" : "no"}`)
 
   const future = simulateFutureBuys(ns, {
     ownedWithPending: new Set(augSummary.ownedWithPending),
@@ -107,8 +105,8 @@ export async function main(ns) {
     lines.push("- Daedalus joined. Narrow focus to rep and the aug package you want.")
   }
 
-  if (gangHoldActive) {
-    lines.push("- Close to gang unlock. Delay reset until gang is created unless there is an exceptional reason.")
+  if (closeToGangUnlock) {
+    lines.push("- Close to gang unlock. Favor finishing the karma grind before resetting.")
   }
 
   const recommendation = decideResetReadiness({
@@ -121,8 +119,7 @@ export async function main(ns) {
     hasRedPillPending: augSummary.hasRedPillPending,
     futureBuys: future.buys.length,
     minPending,
-    inGang,
-    gangHoldActive,
+    closeToGangUnlock,
   })
 
   lines.push("")
@@ -204,4 +201,247 @@ function simulateFutureBuys(ns, opts) {
 
   return {
     buys,
-    totalCost: buys.reduce((sum, x) => sum +
+    totalCost: buys.reduce((sum, x) => sum + x.simulatedPrice, 0),
+    moneyLeft,
+  }
+}
+
+function decideResetReadiness(ctx) {
+  if (ctx.closeToGangUnlock) {
+    return {
+      status: "not yet",
+      reason: "Close to gang unlock. Finish the karma grind first.",
+    }
+  }
+
+  if (!ctx.hasDaedalus) {
+    return {
+      status: "not yet",
+      reason: "Daedalus not joined.",
+    }
+  }
+
+  if (ctx.homeMoney < ctx.reserve) {
+    return {
+      status: "not yet",
+      reason: "Reserve target not met.",
+    }
+  }
+
+  if (ctx.hack < ctx.daedalusHackGate) {
+    return {
+      status: "not yet",
+      reason: "Hacking target not met.",
+    }
+  }
+
+  if (ctx.hasRedPillPending) {
+    return {
+      status: "INSTALL NOW",
+      reason: "The Red Pill is queued.",
+    }
+  }
+
+  if (ctx.pendingCount >= ctx.minPending && ctx.futureBuys === 0) {
+    return {
+      status: "INSTALL NOW",
+      reason: "You have a solid queued package and cannot cheaply extend it further.",
+    }
+  }
+
+  if (ctx.pendingCount >= ctx.minPending) {
+    return {
+      status: "probably yes",
+      reason: "Queued package is decent, but you may still be able to add another good augmentation.",
+    }
+  }
+
+  if (ctx.pendingCount >= Math.max(1, ctx.minPending - 1) && ctx.futureBuys === 0) {
+    return {
+      status: "PUSH FOR 1 MORE",
+      reason: "You are close to threshold, but the package is still a bit thin.",
+    }
+  }
+
+  return {
+    status: "not yet",
+    reason: "Build a stronger augmentation queue first.",
+  }
+}
+
+function buildMarket(ns, factions, owned) {
+  const bestByAug = new Map()
+
+  for (const faction of factions) {
+    const augs = getAugsFromFactionSafe(ns, faction)
+
+    for (const aug of augs) {
+      if (aug === "NeuroFlux Governor") continue
+      if (owned.has(aug)) continue
+
+      const entry = {
+        aug,
+        faction,
+        price: getAugPriceSafe(ns, aug),
+        repReq: getAugRepReqSafe(ns, aug),
+        prereqs: getAugPrereqsSafe(ns, aug),
+        stats: getAugStatsSafe(ns, aug),
+      }
+
+      const existing = bestByAug.get(aug)
+      if (!existing) {
+        bestByAug.set(aug, entry)
+        continue
+      }
+
+      if (getFactionRepSafe(ns, faction) > getFactionRepSafe(ns, existing.faction)) {
+        bestByAug.set(aug, entry)
+      }
+    }
+  }
+
+  return Array.from(bestByAug.values())
+}
+
+function scoreCandidate(ns, entry) {
+  const stats = entry.stats || {}
+  const faction = String(entry.faction || "")
+
+  const hackingScore =
+    weight(stats.hacking, 18) +
+    weight(stats.hacking_exp, 14) +
+    weight(stats.hacking_chance, 12) +
+    weight(stats.hacking_speed, 12) +
+    weight(stats.hacking_money, 10) +
+    weight(stats.hacking_grow, 8)
+
+  const repScore =
+    weight(stats.faction_rep, 10) +
+    weight(stats.company_rep, 3)
+
+  const combatScore =
+    weight(stats.strength, 10) +
+    weight(stats.defense, 10) +
+    weight(stats.dexterity, 10) +
+    weight(stats.agility, 10) +
+    weight(stats.crime_success, 10)
+
+  let score = hackingScore + repScore * 0.9 - combatScore * 0.85
+
+  const factionBoosts = new Map([
+    ["CyberSec", 60],
+    ["Tian Di Hui", 45],
+    ["NiteSec", 70],
+    ["The Black Hand", 75],
+    ["BitRunners", 90],
+    ["Daedalus", 100],
+    ["Illuminati", 60],
+    ["The Covenant", 50],
+    ["Netburners", 40],
+  ])
+
+  const factionPenalties = new Map([
+    ["Slum Snakes", -120],
+    ["Tetrads", -120],
+    ["Speakers for the Dead", -80],
+    ["The Syndicate", -40],
+  ])
+
+  score += (factionBoosts.get(faction) ?? 0)
+  score += (factionPenalties.get(faction) ?? 0)
+
+  const hasMeaningfulHacking = hackingScore > 0
+  const hasMeaningfulRep = repScore > 0
+
+  if (!hasMeaningfulHacking && !hasMeaningfulRep && entry.aug !== "The Red Pill") {
+    return -1
+  }
+
+  if (entry.aug === "The Red Pill") {
+    score += 5000
+  }
+
+  return score
+}
+
+function getOwnedAugsSafe(ns, includePending) {
+  try {
+    return ns.singularity.getOwnedAugmentations(includePending) || []
+  } catch {
+    return []
+  }
+}
+
+function getFactionRepSafe(ns, faction) {
+  try {
+    return ns.singularity.getFactionRep(faction)
+  } catch {
+    return 0
+  }
+}
+
+function getAugsFromFactionSafe(ns, faction) {
+  try {
+    return ns.singularity.getAugmentationsFromFaction(faction) || []
+  } catch {
+    return []
+  }
+}
+
+function getAugStatsSafe(ns, aug) {
+  try {
+    return ns.singularity.getAugmentationStats(aug) || {}
+  } catch {
+    return {}
+  }
+}
+
+function getAugPriceSafe(ns, aug) {
+  try {
+    return Number(ns.singularity.getAugmentationPrice(aug) ?? 0)
+  } catch {
+    return 0
+  }
+}
+
+function getAugRepReqSafe(ns, aug) {
+  try {
+    return Number(ns.singularity.getAugmentationRepReq(aug) ?? 0)
+  } catch {
+    return 0
+  }
+}
+
+function getAugPrereqsSafe(ns, aug) {
+  try {
+    return ns.singularity.getAugmentationPrereq(aug) || []
+  } catch {
+    return []
+  }
+}
+
+function safeHeartBreak(ns) {
+  try {
+    return ns.heart.break()
+  } catch {
+    return 0
+  }
+}
+
+function safeInGang(ns) {
+  try {
+    return !!ns.gang && ns.gang.inGang()
+  } catch {
+    return false
+  }
+}
+
+function fmtMoney(ns, value) {
+  return "$" + ns.formatNumber(value, 3)
+}
+
+function weight(value, factor) {
+  const n = Number(value ?? 1)
+  if (!Number.isFinite(n) || n <= 1) return 0
+  return (n - 1) * factor
+}
