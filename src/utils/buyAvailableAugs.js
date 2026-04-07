@@ -52,7 +52,7 @@ export function buyAvailableAugs(ns, opts = {}) {
     const joinedFactions = Array.isArray(player.factions) ? player.factions.slice() : [];
     const owned = new Set(getOwnedAugsSafe(ns, true));
 
-    const market = buildFactionAugMarket(ns, joinedFactions, owned, includeNeuroFlux);
+    const market = buildFactionAugMarket(ns, joinedFactions, owned, includeNeuroFlux, mode);
     const skipped = [];
     const bought = [];
 
@@ -64,21 +64,20 @@ export function buyAvailableAugs(ns, opts = {}) {
 
     while (true) {
         const moneyAvailable = Math.max(0, ns.getServerMoneyAvailable("home") - reserve);
-
         const candidates = [];
 
         for (const entry of market) {
             if (owned.has(entry.aug) || purchasedNow.has(entry.aug)) continue;
 
-            const missingPrereqs = entry.prereqs.filter((p) => !owned.has(p) && !purchasedNow.has(p));
-            const rep = getFactionRepSafe(ns, entry.faction);
-
-            const score = scoreAug(ns, entry.aug, mode);
+            const score = scoreAug(ns, entry, mode);
+            if (score <= 0) {
+                skipped.push({ aug: entry.aug, faction: entry.faction, reason: "filtered-by-mode" });
+                continue;
+            }
 
             candidates.push({
                 ...entry,
-                factionRep: rep,
-                missingPrereqs,
+                factionRep: getFactionRepSafe(ns, entry.faction),
                 score,
             });
         }
@@ -100,13 +99,23 @@ export function buyAvailableAugs(ns, opts = {}) {
                 continue;
             }
 
-            const chainCost = chain.reduce((sum, item) => sum + item.price, 0);
+            const chainWithScores = chain.map((item) => ({
+                ...item,
+                score: scoreAug(ns, item, mode),
+            }));
+
+            if (chainWithScores.some((item) => item.score <= 0)) {
+                skipped.push({ aug: candidate.aug, faction: candidate.faction, reason: "chain-filtered-by-mode" });
+                continue;
+            }
+
+            const chainCost = chainWithScores.reduce((sum, item) => sum + item.price, 0);
             if (chainCost > moneyAvailable) {
                 skipped.push({ aug: candidate.aug, faction: candidate.faction, reason: "insufficient-money" });
                 continue;
             }
 
-            const repBlocked = chain.find((item) => getFactionRepSafe(ns, item.faction) < item.repReq);
+            const repBlocked = chainWithScores.find((item) => getFactionRepSafe(ns, item.faction) < item.repReq);
             if (repBlocked) {
                 skipped.push({ aug: candidate.aug, faction: candidate.faction, reason: `insufficient-rep:${repBlocked.aug}` });
                 continue;
@@ -115,7 +124,7 @@ export function buyAvailableAugs(ns, opts = {}) {
             const chainBought = [];
             let chainOk = true;
 
-            for (const item of chain) {
+            for (const item of chainWithScores) {
                 if (owned.has(item.aug) || purchasedNow.has(item.aug)) continue;
 
                 const ok = purchaseAugSafe(ns, item.faction, item.aug);
@@ -139,12 +148,19 @@ export function buyAvailableAugs(ns, opts = {}) {
         if (!madeProgress) break;
     }
 
-    const remainingTop = buildFactionAugMarket(ns, joinedFactions, new Set(getOwnedAugsSafe(ns, true)), includeNeuroFlux)
+    const remainingTop = buildFactionAugMarket(
+        ns,
+        joinedFactions,
+        new Set(getOwnedAugsSafe(ns, true)),
+        includeNeuroFlux,
+        mode
+    )
         .filter((x) => !owned.has(x.aug) && !purchasedNow.has(x.aug))
         .map((x) => ({
             ...x,
-            score: scoreAug(ns, x.aug, mode),
+            score: scoreAug(ns, x, mode),
         }))
+        .filter((x) => x.score > 0)
         .sort((a, b) => {
             if (b.score !== a.score) return b.score - a.score;
             if (a.price !== b.price) return a.price - b.price;
@@ -171,7 +187,7 @@ function hasAugApi(ns) {
 
 function getOwnedAugsSafe(ns, includePending) {
     try {
-        return ns.singularity.getOwnedAugmentations(includePending);
+        return ns.singularity.getOwnedAugmentations(includePending) || [];
     } catch {
         return [];
     }
@@ -233,7 +249,7 @@ function purchaseAugSafe(ns, faction, aug) {
     }
 }
 
-function buildFactionAugMarket(ns, factions, owned, includeNeuroFlux) {
+function buildFactionAugMarket(ns, factions, owned, includeNeuroFlux, mode) {
     const bestByAug = new Map();
 
     for (const faction of factions) {
@@ -249,7 +265,11 @@ function buildFactionAugMarket(ns, factions, owned, includeNeuroFlux) {
                 price: getAugPriceSafe(ns, aug),
                 repReq: getAugRepReqSafe(ns, aug),
                 prereqs: getAugPrereqsSafe(ns, aug),
+                stats: getAugStatsSafe(ns, aug),
             };
+
+            const score = scoreAug(ns, entry, mode);
+            if (score <= 0) continue;
 
             const existing = bestByAug.get(aug);
             if (!existing) {
@@ -299,58 +319,124 @@ function buildPurchaseChain(ns, candidate, market, owned, purchasedNow) {
     return chain;
 }
 
-function scoreAug(ns, aug, mode) {
-    const stats = getAugStatsSafe(ns, aug);
+function scoreAug(ns, entry, mode) {
+    const aug = entry.aug;
+    const faction = entry.faction;
+    const stats = entry.stats || getAugStatsSafe(ns, aug);
 
     const hackingScore =
-        weight(stats.hacking, 12) +
-        weight(stats.hacking_exp, 10) +
-        weight(stats.hacking_chance, 8) +
-        weight(stats.hacking_speed, 8) +
-        weight(stats.hacking_money, 7) +
-        weight(stats.hacking_grow, 6) +
-        weight(stats.faction_rep, 6) +
-        weight(stats.company_rep, 2) +
-        weight(stats.charisma, 1) +
-        weight(stats.charisma_exp, 1);
+        weight(stats.hacking, 18) +
+        weight(stats.hacking_exp, 14) +
+        weight(stats.hacking_chance, 12) +
+        weight(stats.hacking_speed, 12) +
+        weight(stats.hacking_money, 10) +
+        weight(stats.hacking_grow, 8);
+
+    const repScore =
+        weight(stats.faction_rep, 10) +
+        weight(stats.company_rep, 3);
 
     const combatScore =
-        weight(stats.strength, 8) +
-        weight(stats.strength_exp, 5) +
-        weight(stats.defense, 8) +
-        weight(stats.defense_exp, 5) +
-        weight(stats.dexterity, 8) +
-        weight(stats.dexterity_exp, 5) +
-        weight(stats.agility, 8) +
-        weight(stats.agility_exp, 5) +
-        weight(stats.crime_money, 6) +
-        weight(stats.crime_success, 8);
+        weight(stats.strength, 10) +
+        weight(stats.strength_exp, 6) +
+        weight(stats.defense, 10) +
+        weight(stats.defense_exp, 6) +
+        weight(stats.dexterity, 10) +
+        weight(stats.dexterity_exp, 6) +
+        weight(stats.agility, 10) +
+        weight(stats.agility_exp, 6) +
+        weight(stats.crime_money, 8) +
+        weight(stats.crime_success, 10);
 
     const utilityScore =
-        weight(stats.faction_rep, 6) +
-        weight(stats.company_rep, 5) +
-        weight(stats.work_money, 3) +
+        weight(stats.charisma, 2) +
+        weight(stats.charisma_exp, 2) +
+        weight(stats.work_money, 2) +
         weight(stats.hacknet_node_money, 1) +
         weight(stats.hacknet_node_purchase_cost, 0.5) +
         weight(stats.hacknet_node_level_cost, 0.5) +
         weight(stats.hacknet_node_ram_cost, 0.5) +
         weight(stats.hacknet_node_core_cost, 0.5);
 
+    const hasMeaningfulHacking = hackingScore > 0;
+    const hasMeaningfulRep = repScore > 0;
+    const hasMeaningfulCombat = combatScore > 0;
+
     let score = 0;
 
     if (mode === "hacking") {
-        score = hackingScore + combatScore * 0.15 + utilityScore * 0.50;
-    } else if (mode === "combat") {
-        score = combatScore + hackingScore * 0.15 + utilityScore * 0.35;
-    } else {
-        score = hackingScore * 0.75 + combatScore * 0.55 + utilityScore * 0.80;
-    }
+        if (!hasMeaningfulHacking && !hasMeaningfulRep && aug !== "The Red Pill") {
+            return -1;
+        }
 
-    if (aug === "The Red Pill") {
-        score += mode === "hacking" ? 1000 : 250;
+        score = hackingScore + repScore * 0.9 + utilityScore * 0.15 - combatScore * 0.85;
+
+        score += factionBias(mode, faction);
+
+        if (hasMeaningfulCombat && !hasMeaningfulHacking && !hasMeaningfulRep) {
+            score -= 1000;
+        }
+
+        if (aug === "The Red Pill") {
+            score += 5000;
+        }
+    } else if (mode === "combat") {
+        if (!hasMeaningfulCombat && !hasMeaningfulRep) {
+            return -1;
+        }
+
+        score = combatScore + repScore * 0.4 + hackingScore * 0.1 + utilityScore * 0.2;
+        score += factionBias(mode, faction);
+    } else {
+        score = hackingScore * 0.8 + combatScore * 0.6 + repScore * 0.8 + utilityScore * 0.4;
+        score += factionBias(mode, faction) * 0.5;
+
+        if (aug === "The Red Pill") {
+            score += 2000;
+        }
     }
 
     return score;
+}
+
+function factionBias(mode, faction) {
+    const name = String(faction || "");
+
+    const hackingFavored = new Map([
+        ["CyberSec", 60],
+        ["Tian Di Hui", 45],
+        ["NiteSec", 70],
+        ["The Black Hand", 75],
+        ["BitRunners", 90],
+        ["Daedalus", 100],
+        ["Illuminati", 60],
+        ["The Covenant", 50],
+        ["Netburners", 40],
+    ]);
+
+    const hackingPenalized = new Map([
+        ["Slum Snakes", -120],
+        ["Tetrads", -120],
+        ["Speakers for the Dead", -80],
+        ["The Syndicate", -40],
+    ]);
+
+    const combatFavored = new Map([
+        ["Slum Snakes", 80],
+        ["Tetrads", 70],
+        ["Speakers for the Dead", 65],
+        ["The Syndicate", 50],
+    ]);
+
+    if (mode === "hacking") {
+        return (hackingFavored.get(name) ?? 0) + (hackingPenalized.get(name) ?? 0);
+    }
+
+    if (mode === "combat") {
+        return combatFavored.get(name) ?? 0;
+    }
+
+    return 0;
 }
 
 function weight(value, factor) {

@@ -6,6 +6,7 @@ export async function main(ns) {
     const xpDistributor = "/xp/xpDistributor.js";
     const gangManager = "/gang/gangManager_v2.js";
     const crimeManager = "/crime/crimeManager.js";
+    const autoGangStarter = "/gang/autoGangStarter.js";
 
     if (!ns.fileExists(killAllScript, "home")) {
         ns.tprint(`[${ts()}] ERROR: Missing ${killAllScript}`);
@@ -44,16 +45,29 @@ export async function main(ns) {
         } else {
             ns.tprint(`[${ts()}] Gang unlocked, but missing ${gangManager}`);
         }
-    } else {
-        if (ns.fileExists(crimeManager, "home")) {
-            ns.tprint(`[${ts()}] Gang not unlocked, starting ${crimeManager}`);
-            const crimePid = ns.run(crimeManager, 1, "karma");
-            if (crimePid === 0) {
-                ns.tprint(`[${ts()}] WARNING: Failed to start ${crimeManager}`);
-            }
-        } else {
-            ns.tprint(`[${ts()}] Gang not unlocked, and missing ${crimeManager}`);
+        return;
+    }
+
+    if (ns.fileExists(crimeManager, "home")) {
+        ns.tprint(`[${ts()}] Gang not unlocked, starting ${crimeManager} karma`);
+        const crimePid = ns.run(crimeManager, 1, "karma");
+        if (crimePid === 0) {
+            ns.tprint(`[${ts()}] WARNING: Failed to start ${crimeManager}`);
         }
+    } else {
+        ns.tprint(`[${ts()}] Gang not unlocked, and missing ${crimeManager}`);
+    }
+
+    await ns.sleep(250);
+
+    if (ns.fileExists(autoGangStarter, "home")) {
+        ns.tprint(`[${ts()}] Starting ${autoGangStarter} Slum Snakes 5000 -54000`);
+        const gangWatchPid = ns.run(autoGangStarter, 1, "Slum Snakes", 5000, -54000);
+        if (gangWatchPid === 0) {
+            ns.tprint(`[${ts()}] WARNING: Failed to start ${autoGangStarter}`);
+        }
+    } else {
+        ns.tprint(`[${ts()}] Missing ${autoGangStarter}`);
     }
 }
 

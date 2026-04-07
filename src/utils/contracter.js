@@ -534,6 +534,43 @@ const codingContractTypesMetadata = [
     },
   },
   {
+    name: "Proper 2-Coloring of a Graph",
+    solver: function (data) {
+      const n = data[0]
+      const edges = data[1]
+
+      const graph = Array.from({ length: n }, () => [])
+      for (const [a, b] of edges) {
+        graph[a].push(b)
+        graph[b].push(a)
+      }
+
+      const color = Array(n).fill(-1)
+
+      for (let start = 0; start < n; start++) {
+        if (color[start] !== -1) continue
+
+        color[start] = 0
+        const queue = [start]
+
+        for (let i = 0; i < queue.length; i++) {
+          const node = queue[i]
+
+          for (const next of graph[node]) {
+            if (color[next] === -1) {
+              color[next] = 1 - color[node]
+              queue.push(next)
+            } else if (color[next] === color[node]) {
+              return []
+            }
+          }
+        }
+      }
+
+      return color
+    },
+  },
+  {
     name: "Encryption I: Caesar Cipher",
     solver: function (data) {
       const text = data[0]
@@ -552,6 +589,37 @@ const codingContractTypesMetadata = [
         if (code >= 65 && code <= 90) {
           const decoded = ((code - 65 - shift + 26) % 26) + 65
           out += String.fromCharCode(decoded)
+          continue
+        }
+
+        out += ch
+      }
+
+      return out
+    },
+  },
+  {
+    name: "Encryption II: Vigenère Cipher",
+    solver: function (data) {
+      const text = data[0]
+      const key = data[1]
+      let out = ""
+      let keyIndex = 0
+
+      for (let i = 0; i < text.length; i++) {
+        const ch = text[i]
+        const code = text.charCodeAt(i)
+
+        if (ch === " ") {
+          out += ch
+          continue
+        }
+
+        if (code >= 65 && code <= 90) {
+          const shift = key.charCodeAt(keyIndex % key.length) - 65
+          const encoded = ((code - 65 + shift) % 26) + 65
+          out += String.fromCharCode(encoded)
+          keyIndex++
           continue
         }
 

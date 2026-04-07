@@ -3,6 +3,8 @@ export async function main(ns) {
     const minPending = Math.max(1, Number(ns.args[0] ?? 5));
     const minPendingWithRedPill = Math.max(1, Number(ns.args[1] ?? 1));
     const reserve = Math.max(0, Number(ns.args[2] ?? 0));
+    const gangKarmaTarget = Number(ns.args[3] ?? -54000);
+    const gangHoldWindow = Math.max(0, Number(ns.args[4] ?? 15000));
 
     if (!hasPlannerApi(ns)) {
         ns.tprint("[installPlanner] Singularity API unavailable.");
@@ -13,6 +15,8 @@ export async function main(ns) {
         minPending,
         minPendingWithRedPill,
         reserve,
+        gangKarmaTarget,
+        gangHoldWindow,
     });
 
     ns.tprint(`[installPlanner] status=${plan.status}`);
@@ -23,6 +27,11 @@ export async function main(ns) {
     ns.tprint(`[installPlanner] reserve=${ns.formatNumber(plan.reserve)}`);
     ns.tprint(`[installPlanner] redPillQueued=${plan.hasRedPillPending}`);
     ns.tprint(`[installPlanner] neuroFluxQueued=${plan.neuroFluxPending}`);
+    ns.tprint(`[installPlanner] inGang=${plan.inGang}`);
+    ns.tprint(`[installPlanner] karma=${ns.formatNumber(plan.karma, 6)}`);
+    ns.tprint(`[installPlanner] gangKarmaTarget=${ns.formatNumber(plan.gangKarmaTarget, 6)}`);
+    ns.tprint(`[installPlanner] karmaRemaining=${ns.formatNumber(plan.karmaRemaining, 6)}`);
+    ns.tprint(`[installPlanner] gangHoldActive=${plan.gangHoldActive}`);
 
     if (plan.pending.length > 0) {
         ns.tprint("[installPlanner] Pending augmentations:");
@@ -47,6 +56,8 @@ export function buildInstallPlan(ns, opts = {}) {
     const minPending = Math.max(1, Number(opts.minPending ?? 5));
     const minPendingWithRedPill = Math.max(1, Number(opts.minPendingWithRedPill ?? 1));
     const reserve = Math.max(0, Number(opts.reserve ?? 0));
+    const gangKarmaTarget = Number(opts.gangKarmaTarget ?? -54000);
+    const gangHoldWindow = Math.max(0, Number(opts.gangHoldWindow ?? 15000));
 
     const ownedNoPending = new Set(getOwnedAugsSafe(ns, false));
     const ownedWithPending = new Set(getOwnedAugsSafe(ns, true));
@@ -66,6 +77,11 @@ export function buildInstallPlan(ns, opts = {}) {
 
     const allOwnedOrPending = ownedWithPending;
     const missingRecommended = getRecommendedUnqueuedAugs(ns, allOwnedOrPending);
+
+    const inGang = safeInGang(ns);
+    const karma = safeHeartBreak(ns);
+    const karmaRemaining = Math.max(0, karma - gangKarmaTarget);
+    const gangHoldActive = !inGang && karma > gangKarmaTarget && karmaRemaining <= gangHoldWindow;
 
     let status = "WAIT";
     let reason = "Not enough queued augmentations yet.";
@@ -96,6 +112,11 @@ export function buildInstallPlan(ns, opts = {}) {
         }
     }
 
+    if (gangHoldActive) {
+        status = "WAIT";
+        reason = `Close to gang unlock. Remaining karma to target is only ${ns.formatNumber(karmaRemaining, 6)}.`;
+    }
+
     return {
         status,
         reason,
@@ -108,6 +129,11 @@ export function buildInstallPlan(ns, opts = {}) {
         neuroFluxPending,
         pending,
         missingRecommended,
+        inGang,
+        karma,
+        gangKarmaTarget,
+        karmaRemaining,
+        gangHoldActive,
     };
 }
 
@@ -223,4 +249,20 @@ function scoreRecommendedAugName(name) {
     if (aug.includes("hacknet")) score += 10;
 
     return score;
+}
+
+function safeInGang(ns) {
+    try {
+        return !!ns.gang && ns.gang.inGang();
+    } catch {
+        return false;
+    }
+}
+
+function safeHeartBreak(ns) {
+    try {
+        return ns.heart.break();
+    } catch {
+        return 0;
+    }
 }
