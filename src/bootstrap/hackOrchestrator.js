@@ -8,11 +8,11 @@ export async function main(ns) {
   const switchHackLevel = Number(ns.args[5] ?? 750)
   const pollMs = Math.max(5000, Number(ns.args[6] ?? 15000))
 
-  const spreadHack = "/hacking/spread-hack.js"
-  const xpGrind = "/xp/xpGrind.js"
-  const xpDistributor = "/xp/xpDistributor.js"
-  const controller = "/hacking/batch/overlapBatchController.js"
-  const playerServers = "/hacking/playerServers.js"
+  const spreadHack = "hacking/spread-hack.js"
+  const xpGrind = "xp/xpGrind.js"
+  const xpDistributor = "xp/xpDistributor.js"
+  const controller = "hacking/batch/overlapBatchController.js"
+  const playerServers = "hacking/playerServers.js"
 
   ns.disableLog("ALL")
   ns.clearLog()
@@ -29,7 +29,7 @@ export async function main(ns) {
       const hackLevel = ns.getHackingLevel()
       const phase = hackLevel < switchHackLevel ? "XP" : "MONEY"
 
-      if (ns.fileExists(playerServers, "home")) {
+      if (ns.fileExists(withSlash(playerServers), "home")) {
         forceSingleOnHome(ns, playerServers, [])
       }
 
@@ -83,27 +83,27 @@ export async function main(ns) {
 }
 
 function forceSingleOnHome(ns, script, args = []) {
-  if (!ns.fileExists(script, "home")) return false
+  if (!ns.fileExists(withSlash(script), "home")) return false
 
   for (const proc of ns.ps("home")) {
-    if (proc.filename === script) {
+    if (sameScript(proc.filename, script)) {
       try { ns.kill(proc.pid) } catch {}
     }
   }
 
-  return ns.run(script, 1, ...args) !== 0
+  return ns.run(withSlash(script), 1, ...args) !== 0
 }
 
 function killAllByScriptOnHome(ns, script) {
   for (const proc of ns.ps("home")) {
-    if (proc.filename === script) {
+    if (sameScript(proc.filename, script)) {
       try { ns.kill(proc.pid) } catch {}
     }
   }
 }
 
 function describeScriptOnHome(ns, script) {
-  const matches = ns.ps("home").filter((p) => p.filename === script)
+  const matches = ns.ps("home").filter((p) => sameScript(p.filename, script))
   if (matches.length === 0) return "off"
 
   const first = matches[0]
@@ -112,12 +112,24 @@ function describeScriptOnHome(ns, script) {
 }
 
 function killDuplicateSelf(ns) {
-  const self = ns.getScriptName()
+  const self = normalizeScript(ns.getScriptName())
   const me = ns.pid
 
   for (const proc of ns.ps("home")) {
-    if (proc.filename === self && proc.pid !== me) {
+    if (normalizeScript(proc.filename) === self && proc.pid !== me) {
       try { ns.kill(proc.pid) } catch {}
     }
   }
+}
+
+function sameScript(a, b) {
+  return normalizeScript(a) === normalizeScript(b)
+}
+
+function normalizeScript(path) {
+  return String(path).replace(/^\/+/, "")
+}
+
+function withSlash(path) {
+  return path.startsWith("/") ? path : `/${path}`
 }
