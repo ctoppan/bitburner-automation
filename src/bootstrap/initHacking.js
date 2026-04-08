@@ -1,230 +1,200 @@
 /** @param {NS} ns **/
 export async function main(ns) {
-    ns.disableLog("sleep");
-    ns.tprint(`[${ts()}] Starting initHacking.js`);
+  ns.disableLog("sleep")
+  ns.tprint(`[${ts()}] Starting initHacking.js`)
 
-    const killAllScript = "/hacking/main/killAll.js";
-    const xpDistributor = "/xp/xpDistributor.js";
-    const stopXp = "/xp/stopXpGrind.js";
-    const hackOrchestrator = "/bootstrap/hackOrchestrator.js";
-    const gangManager = "/gang/gangManager_v2.js";
-    const crimeManager = "/crime/crimeManager.js";
-    const autoGangStarter = "/gang/autoGangStarter.js";
-    const playerServers = "/hacking/playerServers.js";
+  const killAllScript = "/hacking/main/killAll.js"
+  const xpDistributor = "/xp/xpDistributor.js"
+  const stopXp = "/xp/stopXpGrind.js"
+  const hackOrchestrator = "/bootstrap/hackOrchestrator.js"
+  const gangManager = "/gang/gangManager_v2.js"
+  const crimeManager = "/crime/crimeManager.js"
+  const autoGangStarter = "/gang/autoGangStarter.js"
+  const playerServers = "/hacking/playerServers.js"
 
-    const xpTarget = "n00dles";
-    const xpReserveRam = 256;
-    const xpAllowSpread = false;
+  const xpTarget = "n00dles"
+  const xpReserveRam = 256
+  const xpAllowSpread = false
 
-    const orchestratorHackThreshold = 150;
-    const orchestratorSwitchHackLevel = 175; // keep close to init threshold
-    const orchestratorMinRootedMoneyServers = 5;
-    const orchestratorMinHomeRamGb = 128;
-    const pollMs = 15000;
+  const orchestratorHackThreshold = 150
+  const orchestratorSwitchHackLevel = 175
+  const orchestratorXpScanTop = 30
+  const orchestratorMoneyScanTop = 25
+  const pollMs = 15000
 
-    if (!ns.fileExists(killAllScript, "home")) {
-        ns.tprint(`[${ts()}] ERROR: Missing ${killAllScript}`);
-        return;
-    }
+  if (!ns.fileExists(killAllScript, "home")) {
+    ns.tprint(`[${ts()}] ERROR: Missing ${killAllScript}`)
+    return
+  }
 
-    if (!ns.fileExists(xpDistributor, "home")) {
-        ns.tprint(`[${ts()}] ERROR: Missing ${xpDistributor}`);
-        return;
-    }
+  if (!ns.fileExists(xpDistributor, "home")) {
+    ns.tprint(`[${ts()}] ERROR: Missing ${xpDistributor}`)
+    return
+  }
 
-    ns.tprint(`[${ts()}] Running cleanup with ${killAllScript}`);
-    const killPid = ns.run(killAllScript, 1, ns.pid);
-    if (killPid === 0) {
-        ns.tprint(`[${ts()}] ERROR: Failed to start ${killAllScript}`);
-        return;
-    }
+  ns.tprint(`[${ts()}] Running cleanup with ${killAllScript}`)
+  const killPid = ns.run(killAllScript, 1, ns.pid)
+  if (killPid === 0) {
+    ns.tprint(`[${ts()}] ERROR: Failed to start ${killAllScript}`)
+    return
+  }
 
-    await ns.sleep(1000);
+  await ns.sleep(1000)
 
-    startIfMissing(ns, xpDistributor, [xpTarget, xpReserveRam, xpAllowSpread]);
-    await ns.sleep(250);
+  startIfMissing(ns, xpDistributor, [xpTarget, xpReserveRam, xpAllowSpread])
+  await ns.sleep(250)
 
-    if (hasGang(ns)) {
-        startSingleton(ns, gangManager, [150e9, "money", "rep"]);
-    } else {
-        startIfMissing(ns, crimeManager, ["karma"]);
-        await ns.sleep(250);
-        startIfMissing(ns, autoGangStarter, ["Slum Snakes", 5000, -54000]);
-    }
+  if (hasGang(ns)) {
+    startSingleton(ns, gangManager, [150e9, "money", "rep"])
+  } else {
+    startIfMissing(ns, crimeManager, ["karma"])
+    await ns.sleep(250)
+    startIfMissing(ns, autoGangStarter, ["Slum Snakes", 5000, -54000])
+  }
 
-    if (ns.fileExists(playerServers, "home")) {
-        startSingleton(ns, playerServers, []);
-    }
+  if (ns.fileExists(playerServers, "home")) {
+    startSingleton(ns, playerServers, [])
+  }
 
-    while (true) {
-        try {
-            if (hasGang(ns)) {
-                startSingleton(ns, gangManager, [150e9, "money", "rep"]);
-            }
+  while (true) {
+    try {
+      if (hasGang(ns)) {
+        startSingleton(ns, gangManager, [150e9, "money", "rep"])
+      }
 
-            if (ns.fileExists(playerServers, "home")) {
-                startSingleton(ns, playerServers, []);
-            }
+      if (ns.fileExists(playerServers, "home")) {
+        startSingleton(ns, playerServers, [])
+      }
 
-            const shouldRunOrchestrator = shouldSwitchToOrchestrator(
-                ns,
-                orchestratorHackThreshold,
-                orchestratorMinRootedMoneyServers,
-                orchestratorMinHomeRamGb
-            );
+      const shouldRunOrchestrator = ns.getHackingLevel() >= orchestratorHackThreshold
+      const orchestratorRunning = isRunningAnywhere(ns, hackOrchestrator)
+      const xpRunning =
+        isRunningAnywhere(ns, "/xp/xpGrind.js") ||
+        isRunningAnywhere(ns, xpDistributor)
 
-            const orchestratorRunning = isRunning(ns, hackOrchestrator);
-            const xpRunning = isRunning(ns, "/xp/xpGrind.js") || isRunning(ns, xpDistributor);
-
-            if (shouldRunOrchestrator) {
-                if (!orchestratorRunning && ns.fileExists(hackOrchestrator, "home")) {
-                    ns.tprint(`[${ts()}] Switching to orchestrator mode.`);
-                    stopXpEverywhere(ns, stopXp, xpDistributor);
-                    await ns.sleep(500);
-                    startIfMissing(ns, hackOrchestrator, [
-                        0.03,   // xpHackPct
-                        0.08,   // moneyHackPct
-                        1024,   // homeReserveRam
-                        30,     // xpSpacing
-                        80,     // moneySpacing
-                        orchestratorSwitchHackLevel,
-                        5000
-                    ]);
-                }
-            } else {
-                if (!xpRunning) {
-                    ns.tprint(`[${ts()}] Staying in XP mode.`);
-                    startIfMissing(ns, xpDistributor, [xpTarget, xpReserveRam, xpAllowSpread]);
-                }
-            }
-        } catch (err) {
-            ns.tprint(`[${ts()}] ERROR: ${String(err)}`);
+      if (shouldRunOrchestrator) {
+        if (!orchestratorRunning && ns.fileExists(hackOrchestrator, "home")) {
+          ns.tprint(`[${ts()}] Switching to orchestrator mode.`)
+          stopXpEverywhere(ns, stopXp, xpDistributor)
+          await ns.sleep(500)
+          startIfMissing(ns, hackOrchestrator, [
+            0.03,
+            0.08,
+            1024,
+            orchestratorXpScanTop,
+            orchestratorMoneyScanTop,
+            orchestratorSwitchHackLevel,
+            5000
+          ])
         }
-
-        await ns.sleep(pollMs);
-    }
-}
-
-function shouldSwitchToOrchestrator(ns, hackThreshold, minRootedMoneyServers, minHomeRamGb) {
-    const hack = ns.getHackingLevel();
-    const homeRam = ns.getServerMaxRam("home");
-    const rootedMoneyServers = countRootedMoneyServers(ns);
-
-    return (
-        hack >= hackThreshold &&
-        homeRam >= minHomeRamGb &&
-        rootedMoneyServers >= minRootedMoneyServers
-    );
-}
-
-function countRootedMoneyServers(ns) {
-    const all = getAllServers(ns);
-    let count = 0;
-
-    for (const host of all) {
-        if (host === "home") continue;
-        if (!ns.hasRootAccess(host)) continue;
-        if (ns.getServerMaxMoney(host) <= 0) continue;
-        count++;
-    }
-
-    return count;
-}
-
-function getAllServers(ns) {
-    const seen = new Set(["home"]);
-    const queue = ["home"];
-    const out = ["home"];
-
-    while (queue.length > 0) {
-        const host = queue.shift();
-        for (const next of ns.scan(host)) {
-            if (!seen.has(next)) {
-                seen.add(next);
-                queue.push(next);
-                out.push(next);
-            }
+      } else {
+        if (!xpRunning) {
+          ns.tprint(`[${ts()}] Staying in XP mode.`)
+          startIfMissing(ns, xpDistributor, [xpTarget, xpReserveRam, xpAllowSpread])
         }
+      }
+    } catch (err) {
+      ns.tprint(`[${ts()}] ERROR: ${String(err)}`)
     }
 
-    return out;
+    await ns.sleep(pollMs)
+  }
 }
 
 function hasGang(ns) {
-    try {
-        return !!ns.gang && ns.gang.inGang();
-    } catch {
-        return false;
-    }
+  try {
+    return !!ns.gang && ns.gang.inGang()
+  } catch {
+    return false
+  }
 }
 
 function startIfMissing(ns, script, args = []) {
-    if (!ns.fileExists(script, "home")) return false;
-    if (isRunningWithArgs(ns, script, args)) return true;
-    return ns.run(script, 1, ...args) !== 0;
+  if (!ns.fileExists(script, "home")) return false
+  if (isRunningWithArgsAnywhere(ns, script, args)) return true
+  return ns.run(script, 1, ...args) !== 0
 }
 
 function startSingleton(ns, script, args = []) {
-    if (!ns.fileExists(script, "home")) return false;
+  if (!ns.fileExists(script, "home")) return false
 
-    const all = getAllServers(ns);
-    for (const host of all) {
-        for (const proc of ns.ps(host)) {
-            if (proc.filename === script && host !== "home") {
-                try { ns.kill(proc.pid); } catch {}
-            }
-        }
+  const allHosts = scanAll(ns)
+  for (const host of allHosts) {
+    const matches = ns.ps(host).filter((p) => p.filename === script)
+    if (host === "home") {
+      matches
+        .sort((a, b) => a.pid - b.pid)
+        .slice(1)
+        .forEach((p) => {
+          try { ns.kill(p.pid) } catch {}
+        })
+    } else {
+      for (const proc of matches) {
+        try { ns.kill(proc.pid) } catch {}
+      }
     }
+  }
 
-    const homeProcs = ns.ps("home").filter(p => p.filename === script);
-    if (homeProcs.length > 1) {
-        for (let i = 1; i < homeProcs.length; i++) {
-            try { ns.kill(homeProcs[i].pid); } catch {}
-        }
-    }
+  const homeHasOne = ns.ps("home").some((p) => p.filename === script)
+  if (homeHasOne) return true
 
-    if (homeProcs.length >= 1) return true;
-    return ns.run(script, 1, ...args) !== 0;
-}
-
-function isRunning(ns, script) {
-    for (const host of getAllServers(ns)) {
-        const procs = ns.ps(host);
-        if (procs.some((p) => p.filename === script)) return true;
-    }
-    return false;
-}
-
-function isRunningWithArgs(ns, script, args = []) {
-    for (const host of getAllServers(ns)) {
-        const procs = ns.ps(host);
-        for (const p of procs) {
-            if (p.filename !== script) continue;
-            if (sameArgs(p.args, args)) return true;
-        }
-    }
-    return false;
-}
-
-function sameArgs(actual, desired) {
-    if (actual.length !== desired.length) return false;
-    for (let i = 0; i < actual.length; i++) {
-        if (String(actual[i]) !== String(desired[i])) return false;
-    }
-    return true;
+  return ns.run(script, 1, ...args) !== 0
 }
 
 function stopXpEverywhere(ns, stopXpScript, xpDistributor) {
-    if (ns.fileExists(stopXpScript, "home")) {
-        ns.run(stopXpScript, 1);
+  if (ns.fileExists(stopXpScript, "home")) {
+    ns.run(stopXpScript, 1)
+  }
+
+  for (const host of scanAll(ns)) {
+    ns.scriptKill("/xp/xpGrind.js", host)
+    ns.scriptKill(xpDistributor, host)
+    ns.scriptKill("/hacking/spread-hack.js", host)
+  }
+}
+
+function isRunningAnywhere(ns, script) {
+  for (const host of scanAll(ns)) {
+    if (ns.ps(host).some((p) => p.filename === script)) return true
+  }
+  return false
+}
+
+function isRunningWithArgsAnywhere(ns, script, args = []) {
+  for (const host of scanAll(ns)) {
+    for (const proc of ns.ps(host)) {
+      if (proc.filename !== script) continue
+      if (sameArgs(proc.args, args)) return true
     }
-    for (const host of getAllServers(ns)) {
-        ns.scriptKill("/xp/xpGrind.js", host);
-        ns.scriptKill(xpDistributor, host);
-        ns.scriptKill("/hacking/spread-hack.js", host);
+  }
+  return false
+}
+
+function sameArgs(actual, desired) {
+  if (actual.length !== desired.length) return false
+  for (let i = 0; i < actual.length; i++) {
+    if (String(actual[i]) !== String(desired[i])) return false
+  }
+  return true
+}
+
+function scanAll(ns) {
+  const seen = new Set(["home"])
+  const queue = ["home"]
+
+  while (queue.length > 0) {
+    const host = queue.shift()
+    for (const next of ns.scan(host)) {
+      if (!seen.has(next)) {
+        seen.add(next)
+        queue.push(next)
+      }
     }
+  }
+
+  return [...seen]
 }
 
 function ts() {
-    return new Date().toLocaleTimeString();
+  return new Date().toLocaleTimeString()
 }
