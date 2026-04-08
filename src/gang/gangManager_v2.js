@@ -1,4 +1,4 @@
-/** @param {NS} ns */
+/** @param {NS} ns **/
 export async function main(ns) {
   const reserve = Number(ns.args[0] ?? 100_000_000)
   const mode = String(ns.args[1] ?? "money").toLowerCase()
@@ -39,6 +39,7 @@ export async function main(ns) {
     "Traffick Illegal Arms",
     "Armed Robbery",
     "Strongarm Civilians",
+    "Mug People",
   ]
 
   ns.disableLog("ALL")
@@ -102,15 +103,26 @@ export async function main(ns) {
 
     const assignable = memberInfos.filter((m) => !trainees.has(m.name))
 
-    for (let i = 0; i < vigilantesNeeded && i < assignable.length; i++) {
+    const bootstrapGang =
+      members.length < settings.bootstrapMemberCount ||
+      gangInfo.respect < settings.bootstrapRespectTarget
+
+    let cappedVigilantes = vigilantesNeeded
+    if (bootstrapGang) {
+      cappedVigilantes = Math.min(vigilantesNeeded, 1)
+    }
+
+    for (let i = 0; i < cappedVigilantes && i < assignable.length; i++) {
       ns.gang.setMemberTask(assignable[i].name, "Vigilante Justice")
     }
 
-    const workers = assignable.slice(vigilantesNeeded)
+    const workers = assignable.slice(cappedVigilantes)
+
     const respectMode =
       settings.forceRespect ||
       members.length < settings.forceRespectMemberCount ||
-      gangInfo.respect < settings.respectTarget
+      gangInfo.respect < settings.respectTarget ||
+      bootstrapGang
 
     let respectWorkers = 0
     let moneyWorkers = 0
@@ -125,21 +137,36 @@ export async function main(ns) {
         useRespectTask = i >= Math.floor(workers.length * settings.moneyWorkerShare)
       }
 
-      let task = pickBestTaskByStats(
-        ns,
-        info,
-        useRespectTask ? respectTasks : moneyTasks,
-        {
-          favorRespect: useRespectTask,
-          moneyWeight: settings.moneyWeight,
-          respectWeight: settings.respectWeight,
-          wantedWeight: settings.wantedWeight,
-          weakPenalty: settings.weakPenalty,
-        },
-      )
+      let task
 
+      // Bootstrap phase: force easy, reliable progress
+      if (bootstrapGang) {
+        task = pickBootstrapTask(info, useRespectTask)
+      } else {
+        task = pickBestTaskByStats(
+          ns,
+          info,
+          useRespectTask ? respectTasks : moneyTasks,
+          {
+            favorRespect: useRespectTask,
+            moneyWeight: settings.moneyWeight,
+            respectWeight: settings.respectWeight,
+            wantedWeight: settings.wantedWeight,
+            weakPenalty: settings.weakPenalty,
+          },
+        )
+      }
+
+      // Safety fallback for weak members
       if (combatScore(info) < settings.weakFallbackScore) {
-        task = respectMode ? "Strongarm Civilians" : "Mug People"
+        task = useRespectTask ? settings.weakRespectTask : settings.weakMoneyTask
+      }
+
+      // Never let very weak gangs attempt hard noob-trap tasks
+      if (combatScore(info) < settings.hardTaskMinScore) {
+        if (task === "Terrorism" || task === "Human Trafficking" || task === "Traffick Illegal Arms") {
+          task = useRespectTask ? settings.weakRespectTask : settings.weakMoneyTask
+        }
       }
 
       ns.gang.setMemberTask(name, task)
@@ -169,11 +196,13 @@ export async function main(ns) {
         `spent=${formatMoney(ns, cycleBudget - remainingBudget)}`,
         `members=${members.length}`,
         `training=${trainees.size}`,
-        `vig=${vigilantesNeeded}`,
+        `vig=${cappedVigilantes}`,
         `repWorkers=${respectWorkers}`,
         `moneyWorkers=${moneyWorkers}`,
         `respect=${ns.formatNumber(gangInfo.respect, 3)}`,
+        `respectGain=${ns.formatNumber(gangInfo.respectGainRate ?? 0, 3)}`,
         `wantedPenalty=${(gangInfo.wantedPenalty * 100).toFixed(2)}%`,
+        `bootstrap=${bootstrapGang}`,
         `mode=${mode}`,
         `focus=${focus}`,
       ].join(" | "))
@@ -192,6 +221,8 @@ function getModeSettings(mode, focus) {
         trainStat: 175,
         respectTarget: 1_500_000,
         forceRespectMemberCount: 10,
+        bootstrapRespectTarget: 25_000,
+        bootstrapMemberCount: 6,
         moneyWorkerShare: 0.60,
         moneyWeight: 0.75,
         respectWeight: 0.90,
@@ -201,7 +232,10 @@ function getModeSettings(mode, focus) {
         penalty1: 0.97,
         penalty2: 0.93,
         penalty3: 0.89,
-        weakFallbackScore: 220,
+        weakFallbackScore: 500,
+        hardTaskMinScore: 700,
+        weakRespectTask: "Mug People",
+        weakMoneyTask: "Mug People",
         maxSpendRatioPerCycle: 0.20,
         midGearThreshold: 1.75,
         lateGearThreshold: 3.00,
@@ -215,6 +249,8 @@ function getModeSettings(mode, focus) {
         trainStat: 125,
         respectTarget: 750_000,
         forceRespectMemberCount: 10,
+        bootstrapRespectTarget: 25_000,
+        bootstrapMemberCount: 6,
         moneyWorkerShare: 0.78,
         moneyWeight: 1.00,
         respectWeight: 0.40,
@@ -224,7 +260,10 @@ function getModeSettings(mode, focus) {
         penalty1: 0.95,
         penalty2: 0.90,
         penalty3: 0.85,
-        weakFallbackScore: 220,
+        weakFallbackScore: 500,
+        hardTaskMinScore: 700,
+        weakRespectTask: "Mug People",
+        weakMoneyTask: "Mug People",
         maxSpendRatioPerCycle: 0.25,
         midGearThreshold: 1.75,
         lateGearThreshold: 3.00,
@@ -239,6 +278,8 @@ function getModeSettings(mode, focus) {
         trainStat: 90,
         respectTarget: 350_000,
         forceRespectMemberCount: 10,
+        bootstrapRespectTarget: 25_000,
+        bootstrapMemberCount: 6,
         moneyWorkerShare: 0.90,
         moneyWeight: 1.30,
         respectWeight: 0.18,
@@ -248,7 +289,10 @@ function getModeSettings(mode, focus) {
         penalty1: 0.90,
         penalty2: 0.86,
         penalty3: 0.82,
-        weakFallbackScore: 220,
+        weakFallbackScore: 500,
+        hardTaskMinScore: 700,
+        weakRespectTask: "Mug People",
+        weakMoneyTask: "Mug People",
         maxSpendRatioPerCycle: 0.30,
         midGearThreshold: 1.75,
         lateGearThreshold: 3.00,
@@ -268,6 +312,8 @@ function getModeSettings(mode, focus) {
       trainStat: Math.min(base.trainStat, 75),
       respectTarget: Math.max(base.respectTarget, 5_000_000),
       forceRespectMemberCount: 12,
+      bootstrapRespectTarget: Math.max(base.bootstrapRespectTarget, 50_000),
+      bootstrapMemberCount: Math.max(base.bootstrapMemberCount, 8),
       moneyWorkerShare: 0.55,
       moneyWeight: Math.max(0.70, base.moneyWeight * 0.75),
       respectWeight: Math.max(1.10, base.respectWeight * 3.5),
@@ -277,7 +323,10 @@ function getModeSettings(mode, focus) {
       penalty1: Math.max(base.penalty1, 0.94),
       penalty2: Math.max(base.penalty2, 0.90),
       penalty3: Math.max(base.penalty3, 0.86),
-      weakFallbackScore: 260,
+      weakFallbackScore: Math.max(base.weakFallbackScore, 550),
+      hardTaskMinScore: Math.max(base.hardTaskMinScore, 800),
+      weakRespectTask: "Mug People",
+      weakMoneyTask: "Strongarm Civilians",
       maxSpendRatioPerCycle: Math.max(base.maxSpendRatioPerCycle, 0.35),
       midGearThreshold: 1.25,
       lateGearThreshold: 1.90,
@@ -334,6 +383,15 @@ function buyGearTierBudgeted(ns, members, gearList, reserve, budget) {
   }
 
   return remaining
+}
+
+function pickBootstrapTask(info, useRespectTask) {
+  const score = combatScore(info)
+
+  if (score < 450) return "Mug People"
+  if (score < 700) return useRespectTask ? "Strongarm Civilians" : "Mug People"
+  if (score < 900) return useRespectTask ? "Armed Robbery" : "Strongarm Civilians"
+  return useRespectTask ? "Armed Robbery" : "Deal Drugs"
 }
 
 function pickBestTaskByStats(ns, memberInfo, taskList, cfg) {
