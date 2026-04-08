@@ -1,219 +1,109 @@
 /** @param {NS} ns **/
 export async function main(ns) {
-  ns.disableLog("sleep")
-  ns.tprint(`[${ts()}] Starting initHacking.js`)
+  ns.disableLog("ALL");
+  ns.tprint(`[${ts()}] Starting initHacking.js`);
 
-  const killAllScript = "/hacking/main/killAll.js"
-  const xpDistributor = "/xp/xpDistributor.js"
-  const stopXp = "/xp/stopXpGrind.js"
-  const hackOrchestrator = "/bootstrap/hackOrchestrator.js"
-  const gangManager = "/gang/gangManager_v2.js"
-  const crimeManager = "/crime/crimeManager.js"
-  const autoGangStarter = "/gang/autoGangStarter.js"
-  const playerServers = "/hacking/playerServers.js"
+  const killAllScript = "/hacking/main/killAll.js";
+  const orchestratorScript = "/bootstrap/hackOrchestrator.js";
+  const gangManager = "/gang/gangManager_v2.js";
 
-  const xpTarget = "n00dles"
-  const xpReserveRam = 256
-  const xpAllowSpread = false
-
-  const orchestratorHackThreshold = 150
-  const orchestratorSwitchHackLevel = 175
-  const orchestratorXpScanTop = 30
-  const orchestratorMoneyScanTop = 25
-  const pollMs = 15000
-
-  killDuplicatesOnHome(ns)
+  killDuplicateSelf(ns);
 
   if (!ns.fileExists(killAllScript, "home")) {
-    ns.tprint(`[${ts()}] ERROR: Missing ${killAllScript}`)
-    return
+    ns.tprint(`[${ts()}] ERROR: Missing ${killAllScript}`);
+    return;
   }
 
-  if (!ns.fileExists(xpDistributor, "home")) {
-    ns.tprint(`[${ts()}] ERROR: Missing ${xpDistributor}`)
-    return
+  if (!ns.fileExists(orchestratorScript, "home")) {
+    ns.tprint(`[${ts()}] ERROR: Missing ${orchestratorScript}`);
+    return;
   }
 
-  ns.tprint(`[${ts()}] Running cleanup with ${killAllScript}`)
-  const killPid = ns.run(killAllScript, 1, ns.pid)
+  ns.tprint(`[${ts()}] Running cleanup with ${killAllScript}`);
+  const killPid = ns.run(killAllScript, 1, ns.pid);
   if (killPid === 0) {
-    ns.tprint(`[${ts()}] ERROR: Failed to start ${killAllScript}`)
-    return
+    ns.tprint(`[${ts()}] ERROR: Failed to start ${killAllScript}`);
+    return;
   }
 
-  await ns.sleep(1000)
+  await ns.sleep(1500);
 
-  ensureSingletonOnHome(ns, xpDistributor, [xpTarget, xpReserveRam, xpAllowSpread])
-  await ns.sleep(250)
+  // README-aligned defaults
+  const orchestratorArgs = [0.03, 0.08, 1024, 30, 80, 2500, 15000];
 
-  if (hasGang(ns)) {
-    ensureSingletonOnHome(ns, gangManager, [150e9, "money", "rep"])
-  } else {
-    ensureSingletonOnHome(ns, crimeManager, ["karma"])
-    await ns.sleep(250)
-    ensureSingletonOnHome(ns, autoGangStarter, ["Slum Snakes", 5000, -54000])
-  }
-
-  if (ns.fileExists(playerServers, "home")) {
-    ensureSingletonOnHome(ns, playerServers, [])
-  }
-
-  while (true) {
-    try {
-      killManagedDuplicates(ns)
-
-      if (hasGang(ns)) {
-        ensureSingletonOnHome(ns, gangManager, [150e9, "money", "rep"])
-      }
-
-      if (ns.fileExists(playerServers, "home")) {
-        ensureSingletonOnHome(ns, playerServers, [])
-      }
-
-      const shouldRunOrchestrator = ns.getHackingLevel() >= orchestratorHackThreshold
-      const orchestratorRunning = isRunningAnywhere(ns, hackOrchestrator)
-      const xpRunning =
-        isRunningAnywhere(ns, "/xp/xpGrind.js") ||
-        isRunningAnywhere(ns, xpDistributor)
-
-      if (shouldRunOrchestrator) {
-        if (!orchestratorRunning && ns.fileExists(hackOrchestrator, "home")) {
-          ns.tprint(`[${ts()}] Switching to orchestrator mode.`)
-          stopXpEverywhere(ns, stopXp, xpDistributor)
-          await ns.sleep(500)
-          ensureSingletonOnHome(ns, hackOrchestrator, [
-            0.03,
-            0.08,
-            1024,
-            orchestratorXpScanTop,
-            orchestratorMoneyScanTop,
-            orchestratorSwitchHackLevel,
-            5000
-          ])
-        }
-      } else {
-        if (!xpRunning) {
-          ns.tprint(`[${ts()}] Staying in XP mode.`)
-          ensureSingletonOnHome(ns, xpDistributor, [xpTarget, xpReserveRam, xpAllowSpread])
-        }
-      }
-    } catch (err) {
-      ns.tprint(`[${ts()}] ERROR: ${String(err)}`)
+  if (!isRunningWithArgsOnHome(ns, orchestratorScript, orchestratorArgs)) {
+    killAllInstancesOnHome(ns, orchestratorScript);
+    const pid = ns.run(orchestratorScript, 1, ...orchestratorArgs);
+    if (pid === 0) {
+      ns.tprint(`[${ts()}] ERROR: Failed to start ${orchestratorScript}`);
+      return;
     }
-
-    await ns.sleep(pollMs)
+    ns.tprint(`[${ts()}] Started orchestrator.`);
   }
+
+  // Start gang manager once if available. Do not keep re-spawning forever.
+  if (hasGang(ns) && ns.fileExists(gangManager, "home")) {
+    ensureSingletonOnHome(ns, gangManager, [110e9, "money", "rep"]);
+  }
+
+  ns.tprint(`[${ts()}] initHacking.js handoff complete.`);
 }
 
 function hasGang(ns) {
   try {
-    return !!ns.gang && ns.gang.inGang()
+    return !!ns.gang && ns.gang.inGang();
   } catch {
-    return false
+    return false;
   }
 }
 
 function ensureSingletonOnHome(ns, script, args = []) {
-  if (!ns.fileExists(script, "home")) return false
+  const matches = ns.ps("home").filter((p) => p.filename === script);
 
-  const homeMatches = ns.ps("home").filter((p) => p.filename === script)
-
-  if (homeMatches.length > 1) {
-    homeMatches
-      .sort((a, b) => a.pid - b.pid)
-      .slice(1)
-      .forEach((p) => {
-        try { ns.kill(p.pid) } catch {}
-      })
+  let exactFound = false;
+  for (const proc of matches) {
+    if (!exactFound && sameArgs(proc.args, args)) {
+      exactFound = true;
+      continue;
+    }
+    try { ns.kill(proc.pid); } catch {}
   }
 
-  const exact = ns.ps("home").find((p) => p.filename === script && sameArgs(p.args, args))
-  if (exact) return true
-
-  const remaining = ns.ps("home").filter((p) => p.filename === script)
-  for (const proc of remaining) {
-    try { ns.kill(proc.pid) } catch {}
-  }
-
-  return ns.run(script, 1, ...args) !== 0
-}
-
-function stopXpEverywhere(ns, stopXpScript, xpDistributor) {
-  if (ns.fileExists(stopXpScript, "home")) {
-    ns.run(stopXpScript, 1)
-  }
-
-  for (const host of scanAll(ns)) {
-    ns.scriptKill("/xp/xpGrind.js", host)
-    ns.scriptKill(xpDistributor, host)
-    ns.scriptKill("/hacking/spread-hack.js", host)
+  if (!exactFound) {
+    ns.run(script, 1, ...args);
   }
 }
 
-function isRunningAnywhere(ns, script) {
-  for (const host of scanAll(ns)) {
-    if (ns.ps(host).some((p) => p.filename === script)) return true
+function killDuplicateSelf(ns) {
+  const self = ns.getScriptName();
+  const me = ns.pid;
+  for (const proc of ns.ps("home")) {
+    if (proc.filename === self && proc.pid !== me) {
+      try { ns.kill(proc.pid); } catch {}
+    }
   }
-  return false
+}
+
+function killAllInstancesOnHome(ns, script) {
+  for (const proc of ns.ps("home")) {
+    if (proc.filename === script) {
+      try { ns.kill(proc.pid); } catch {}
+    }
+  }
+}
+
+function isRunningWithArgsOnHome(ns, script, args = []) {
+  return ns.ps("home").some((p) => p.filename === script && sameArgs(p.args, args));
 }
 
 function sameArgs(actual, desired) {
-  if (actual.length !== desired.length) return false
+  if (actual.length !== desired.length) return false;
   for (let i = 0; i < actual.length; i++) {
-    if (String(actual[i]) !== String(desired[i])) return false
+    if (String(actual[i]) !== String(desired[i])) return false;
   }
-  return true
-}
-
-function scanAll(ns) {
-  const seen = new Set(["home"])
-  const queue = ["home"]
-
-  while (queue.length > 0) {
-    const host = queue.shift()
-    for (const next of ns.scan(host)) {
-      if (!seen.has(next)) {
-        seen.add(next)
-        queue.push(next)
-      }
-    }
-  }
-
-  return [...seen]
-}
-
-function killDuplicatesOnHome(ns) {
-  const self = ns.getScriptName()
-  const me = ns.pid
-  const matches = ns.ps("home").filter((p) => p.filename === self && p.pid !== me)
-  for (const proc of matches) {
-    try { ns.kill(proc.pid) } catch {}
-  }
-}
-
-function killManagedDuplicates(ns) {
-  const managed = [
-    "/gang/gangManager_v2.js",
-    "/hacking/playerServers.js",
-    "/bootstrap/hackOrchestrator.js",
-    "/xp/xpDistributor.js",
-    "/crime/crimeManager.js",
-    "/gang/autoGangStarter.js",
-  ]
-
-  for (const script of managed) {
-    const matches = ns.ps("home").filter((p) => p.filename === script)
-    if (matches.length > 1) {
-      matches
-        .sort((a, b) => a.pid - b.pid)
-        .slice(1)
-        .forEach((p) => {
-          try { ns.kill(p.pid) } catch {}
-        })
-    }
-  }
+  return true;
 }
 
 function ts() {
-  return new Date().toLocaleTimeString()
+  return new Date().toLocaleTimeString();
 }

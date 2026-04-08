@@ -1,192 +1,146 @@
 /** @param {NS} ns **/
 export async function main(ns) {
-  const xpHackPct = Number(ns.args[0] ?? 0.03)
-  const moneyHackPct = Number(ns.args[1] ?? 0.08)
-  const homeReserveRam = Number(ns.args[2] ?? 1024)
-  const xpScanTop = Number(ns.args[3] ?? 30)
-  const moneyScanTop = Number(ns.args[4] ?? 25)
-  const switchHackLevel = Number(ns.args[5] ?? 175)
-  const pollMs = Math.max(3000, Number(ns.args[6] ?? 5000))
+  const xpHackPct = Number(ns.args[0] ?? 0.03);
+  const moneyHackPct = Number(ns.args[1] ?? 0.08);
+  const homeReserveRam = Number(ns.args[2] ?? 1024);
+  const xpSpacing = Number(ns.args[3] ?? 30);
+  const moneySpacing = Number(ns.args[4] ?? 80);
+  const switchHackLevel = Number(ns.args[5] ?? 2500);
+  const pollMs = Math.max(5000, Number(ns.args[6] ?? 15000));
 
-  const controller = "/hacking/batch/overlapBatchController.js"
-  const xpDistributor = "/xp/xpDistributor.js"
-  const xpGrind = "/xp/xpGrind.js"
-  const spreadHack = "/hacking/spread-hack.js"
-  const playerServers = "/hacking/playerServers.js"
+  const spreadHack = "/hacking/spread-hack.js";
+  const xpGrind = "/xp/xpGrind.js";
+  const xpDistributor = "/xp/xpDistributor.js";
+  const controller = "/hacking/batch/overlapBatchController.js";
+  const playerServers = "/hacking/playerServers.js";
 
-  const CONTROLLER_RESTART_COOLDOWN_MS = 30000
-  const TARGETED_XP_ARGS = ["n00dles", 256, false]
+  ns.disableLog("ALL");
+  ns.clearLog();
 
-  ns.disableLog("ALL")
-  ns.clearLog()
+  killDuplicateSelf(ns);
 
-  killDuplicateOrchestrators(ns)
-
-  let lastPhase = ""
-  let lastDesiredArgsKey = ""
-  let lastPurchasedCount = -1
-  let lastPurchasedRamTotal = -1
-  let lastControllerRestartAt = 0
+  let lastPhase = "";
+  let lastControllerMode = "";
 
   while (true) {
     try {
-      killDuplicateOrchestrators(ns)
+      killDuplicateSelf(ns);
 
-      const hackLevel = ns.getHackingLevel()
-      const inXpPhase = hackLevel < switchHackLevel
+      const hackLevel = ns.getHackingLevel();
+      const phase = hackLevel < switchHackLevel ? "XP" : "MONEY";
 
-      const desiredControllerArgs = inXpPhase
-        ? [xpHackPct, -1, homeReserveRam, xpScanTop]
-        : [moneyHackPct, 80, homeReserveRam, moneyScanTop]
-
-      const desiredArgsKey = JSON.stringify(desiredControllerArgs)
-
-      const purchasedServers = safeGetPurchasedServers(ns)
-      const purchasedCount = purchasedServers.length
-      const purchasedRamTotal = getPurchasedRamTotal(ns, purchasedServers)
-
-      const phaseName = inXpPhase ? "XP" : "MONEY"
-      const phaseChanged = lastPhase !== "" && lastPhase !== phaseName
-      const argsChanged = lastDesiredArgsKey !== "" && lastDesiredArgsKey !== desiredArgsKey
-      const infraChanged =
-        purchasedCount !== lastPurchasedCount ||
-        purchasedRamTotal !== lastPurchasedRamTotal
-
-      let forceRestart = false
-      let restartReason = ""
-
-      if (phaseChanged) {
-        forceRestart = true
-        restartReason = "phase change"
-      } else if (argsChanged) {
-        forceRestart = true
-        restartReason = "arg change"
-      } else if (
-        infraChanged &&
-        Date.now() - lastControllerRestartAt >= CONTROLLER_RESTART_COOLDOWN_MS
-      ) {
-        forceRestart = true
-        restartReason = "infrastructure change"
-      }
-
-      enforceController(ns, controller, desiredControllerArgs, forceRestart, restartReason)
-      if (forceRestart) lastControllerRestartAt = Date.now()
-
+      // Keep infrastructure helper singleton
       if (ns.fileExists(playerServers, "home")) {
-        startIfMissingWithArgs(ns, playerServers, [])
+        ensureSingletonOnHome(ns, playerServers, []);
       }
 
-      if (inXpPhase) {
-        startIfMissingWithArgs(ns, xpDistributor, TARGETED_XP_ARGS)
-        stopAllByScript(ns, xpGrind)
-        stopAllByScript(ns, spreadHack)
+      if (phase === "XP") {
+        // README-aligned early phase:
+        // spread-hack + xpGrind + xpDistributor + overlap controller
+        ensureSingletonAnywhere(ns, spreadHack, [], "home");
+        ensureSingletonAnywhere(ns, xpGrind, [], "home");
+        ensureSingletonAnywhere(ns, xpDistributor, ["n00dles", 256, false], "home");
+
+        const desiredControllerArgs = [xpHackPct, xpSpacing, homeReserveRam, 30];
+        ensureSingletonAnywhere(ns, controller, desiredControllerArgs, "home");
+
+        if (lastPhase !== phase || lastControllerMode !== "XP") {
+          ns.tprint(`[orchestrator] XP phase active at hack ${hackLevel}.`);
+        }
+
+        lastControllerMode = "XP";
       } else {
-        stopAllByScript(ns, xpDistributor)
-        stopAllByScript(ns, xpGrind)
-        stopAllByScript(ns, spreadHack)
+        // README-aligned money phase:
+        // stop XP helpers, keep controller in money mode
+        killAllByScript(ns, spreadHack);
+        killAllByScript(ns, xpGrind);
+        killAllByScript(ns, xpDistributor);
+
+        const desiredControllerArgs = [moneyHackPct, moneySpacing, homeReserveRam, 25];
+        ensureSingletonAnywhere(ns, controller, desiredControllerArgs, "home");
+
+        if (lastPhase !== phase || lastControllerMode !== "MONEY") {
+          ns.tprint(`[orchestrator] MONEY phase active at hack ${hackLevel}.`);
+        }
+
+        lastControllerMode = "MONEY";
       }
 
-      const controllerProc = ns.ps("home").find((p) => p.filename === controller)
-      const controllerPid = controllerProc ? controllerProc.pid : 0
+      lastPhase = phase;
 
-      ns.clearLog()
-      ns.print(`[orchestrator] phase=${phaseName}`)
-      ns.print(`[orchestrator] hack=${ns.formatNumber(hackLevel, 3)} switch=${ns.formatNumber(switchHackLevel, 3)}`)
-      ns.print(`[orchestrator] pservs=${purchasedCount} totalRam=${formatRam(ns, purchasedRamTotal)}`)
-      ns.print(`[orchestrator] controllerPid=${controllerPid}`)
-      ns.print(`[orchestrator] controllerArgs=${desiredControllerArgs.join(" ")}`)
-      ns.print(`[orchestrator] xpDistributor=${isRunningAnywhere(ns, xpDistributor) ? "on" : "off"}`)
-      ns.print(`[orchestrator] playerServers=${isRunningAnywhere(ns, playerServers) ? "on" : "off"}`)
-
-      lastPhase = phaseName
-      lastDesiredArgsKey = desiredArgsKey
-      lastPurchasedCount = purchasedCount
-      lastPurchasedRamTotal = purchasedRamTotal
+      ns.clearLog();
+      ns.print(`[orchestrator] phase=${phase}`);
+      ns.print(`[orchestrator] hack=${hackLevel}`);
+      ns.print(`[orchestrator] switch=${switchHackLevel}`);
+      ns.print(`[orchestrator] spreadHack=${isRunningAnywhere(ns, spreadHack) ? "on" : "off"}`);
+      ns.print(`[orchestrator] xpGrind=${isRunningAnywhere(ns, xpGrind) ? "on" : "off"}`);
+      ns.print(`[orchestrator] xpDistributor=${isRunningAnywhere(ns, xpDistributor) ? "on" : "off"}`);
+      ns.print(`[orchestrator] controller=${findRunningArgs(ns, controller)}`);
+      ns.print(`[orchestrator] playerServers=${isRunningAnywhere(ns, playerServers) ? "on" : "off"}`);
     } catch (err) {
-      ns.print(`[orchestrator] ERROR: ${String(err)}`)
+      ns.print(`[orchestrator] ERROR: ${String(err)}`);
     }
 
-    await ns.sleep(pollMs)
+    await ns.sleep(pollMs);
   }
 }
 
-function safeGetPurchasedServers(ns) {
-  try {
-    return ns.getPurchasedServers()
-  } catch {
-    return []
+function ensureSingletonOnHome(ns, script, args = []) {
+  if (!ns.fileExists(script, "home")) return false;
+
+  const matches = ns.ps("home").filter((p) => p.filename === script);
+  let exactFound = false;
+
+  for (const proc of matches) {
+    if (!exactFound && sameArgs(proc.args, args)) {
+      exactFound = true;
+      continue;
+    }
+    try { ns.kill(proc.pid); } catch {}
   }
+
+  if (!exactFound) {
+    return ns.run(script, 1, ...args) !== 0;
+  }
+
+  return true;
 }
 
-function getPurchasedRamTotal(ns, servers) {
-  let total = 0
-  for (const host of servers) {
-    try {
-      total += ns.getServerMaxRam(host)
-    } catch {}
-  }
-  return total
-}
+function ensureSingletonAnywhere(ns, script, args = [], preferredHost = "home") {
+  if (!ns.fileExists(script, "home")) return false;
 
-function enforceController(ns, script, desiredArgs, forceRestart, restartReason = "") {
-  if (!ns.fileExists(script, "home")) return
+  const all = scanAll(ns);
+  const matches = [];
 
-  let running = ns.ps("home").filter((p) => p.filename === script)
-
-  if (running.length > 1) {
-    running
-      .sort((a, b) => a.pid - b.pid)
-      .slice(1)
-      .forEach((p) => {
-        try { ns.kill(p.pid) } catch {}
-      })
-  }
-
-  running = ns.ps("home").filter((p) => p.filename === script)
-
-  if (running.length === 0) {
-    ns.exec(script, "home", 1, ...desiredArgs)
-    return
-  }
-
-  const proc = running[0]
-  const argsMatch = sameArgs(proc.args, desiredArgs)
-
-  if (forceRestart || !argsMatch) {
-    try { ns.kill(proc.pid) } catch {}
-    ns.exec(script, "home", 1, ...desiredArgs)
-    if (restartReason) {
-      ns.print(`[orchestrator] restarted controller reason=${restartReason}`)
+  for (const host of all) {
+    for (const proc of ns.ps(host)) {
+      if (proc.filename === script) {
+        matches.push({ host, proc });
+      }
     }
   }
-}
 
-function killDuplicateOrchestrators(ns) {
-  const me = ns.pid
-  const self = ns.getScriptName()
-
-  for (const proc of ns.ps("home")) {
-    if (proc.filename === self && proc.pid !== me) {
-      try { ns.kill(proc.pid) } catch {}
+  let exactFound = false;
+  for (const { host, proc } of matches) {
+    if (!exactFound && host === preferredHost && sameArgs(proc.args, args)) {
+      exactFound = true;
+      continue;
     }
+    try { ns.kill(proc.pid); } catch {}
   }
+
+  if (!exactFound) {
+    return ns.exec(script, preferredHost, 1, ...args) !== 0;
+  }
+
+  return true;
 }
 
-function startIfMissingWithArgs(ns, script, args = []) {
-  if (!ns.fileExists(script, "home")) return false
-
-  const already = ns.ps("home").some((p) => p.filename === script && sameArgs(p.args, args))
-  if (already) return true
-
-  const pid = ns.exec(script, "home", 1, ...args)
-  return pid !== 0
-}
-
-function stopAllByScript(ns, script) {
+function killAllByScript(ns, script) {
   for (const host of scanAll(ns)) {
     for (const proc of ns.ps(host)) {
       if (proc.filename === script) {
-        try { ns.kill(proc.pid) } catch {}
+        try { ns.kill(proc.pid); } catch {}
       }
     }
   }
@@ -194,41 +148,50 @@ function stopAllByScript(ns, script) {
 
 function isRunningAnywhere(ns, script) {
   for (const host of scanAll(ns)) {
-    if (ns.ps(host).some((p) => p.filename === script)) return true
+    if (ns.ps(host).some((p) => p.filename === script)) return true;
   }
-  return false
+  return false;
+}
+
+function findRunningArgs(ns, script) {
+  for (const host of scanAll(ns)) {
+    const proc = ns.ps(host).find((p) => p.filename === script);
+    if (proc) return `${host} :: ${proc.args.join(" ")}`;
+  }
+  return "off";
+}
+
+function killDuplicateSelf(ns) {
+  const self = ns.getScriptName();
+  const me = ns.pid;
+  for (const proc of ns.ps("home")) {
+    if (proc.filename === self && proc.pid !== me) {
+      try { ns.kill(proc.pid); } catch {}
+    }
+  }
 }
 
 function scanAll(ns) {
-  const seen = new Set(["home"])
-  const queue = ["home"]
+  const seen = new Set(["home"]);
+  const queue = ["home"];
 
   while (queue.length > 0) {
-    const host = queue.shift()
+    const host = queue.shift();
     for (const next of ns.scan(host)) {
       if (!seen.has(next)) {
-        seen.add(next)
-        queue.push(next)
+        seen.add(next);
+        queue.push(next);
       }
     }
   }
 
-  return [...seen]
+  return [...seen];
 }
 
 function sameArgs(actual, desired) {
-  if (actual.length !== desired.length) return false
+  if (actual.length !== desired.length) return false;
   for (let i = 0; i < actual.length; i++) {
-    if (String(actual[i]) !== String(desired[i])) return false
+    if (String(actual[i]) !== String(desired[i])) return false;
   }
-  return true
-}
-
-function formatRam(ns, value) {
-  if (!Number.isFinite(value) || value < 0) return "n/a"
-  try {
-    return ns.formatRam(value)
-  } catch {
-    return `${value}GB`
-  }
+  return true;
 }
