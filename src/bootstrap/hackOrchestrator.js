@@ -5,7 +5,7 @@ export async function main(ns) {
   const homeReserveRam = Number(ns.args[2] ?? 1024)
   const xpSpacing = Number(ns.args[3] ?? 30)
   const moneySpacing = Number(ns.args[4] ?? 80)
-  const switchHackLevel = Number(ns.args[5] ?? 2500)
+  const switchHackLevel = Number(ns.args[5] ?? 750)
   const pollMs = Math.max(5000, Number(ns.args[6] ?? 15000))
 
   const spreadHack = "/hacking/spread-hack.js"
@@ -29,20 +29,18 @@ export async function main(ns) {
       const hackLevel = ns.getHackingLevel()
       const phase = hackLevel < switchHackLevel ? "XP" : "MONEY"
 
-      // Infrastructure helper, always one copy only
       if (ns.fileExists(playerServers, "home")) {
-        ensureSingletonOnHome(ns, playerServers, [])
+        forceSingleOnHome(ns, playerServers, [])
       }
 
       if (phase === "XP") {
-        // README-aligned early phase
-        ensureSingletonOnHome(ns, spreadHack, [])
-        ensureSingletonOnHome(ns, xpGrind, [])
-        ensureSingletonOnHome(ns, xpDistributor, ["n00dles", 256, false])
+        forceSingleOnHome(ns, spreadHack, [])
+        forceSingleOnHome(ns, xpGrind, [])
+        forceSingleOnHome(ns, xpDistributor, ["n00dles", 256, false])
 
         const desiredControllerArgs = [xpHackPct, xpSpacing, homeReserveRam, 30]
         const controllerArgsKey = JSON.stringify(desiredControllerArgs)
-        ensureSingletonOnHome(ns, controller, desiredControllerArgs)
+        forceSingleOnHome(ns, controller, desiredControllerArgs)
 
         if (lastPhase !== phase || lastControllerArgsKey !== controllerArgsKey) {
           ns.tprint(`[orchestrator] XP phase active at hack ${hackLevel}.`)
@@ -50,14 +48,13 @@ export async function main(ns) {
 
         lastControllerArgsKey = controllerArgsKey
       } else {
-        // Money phase
         killAllByScriptOnHome(ns, spreadHack)
         killAllByScriptOnHome(ns, xpGrind)
         killAllByScriptOnHome(ns, xpDistributor)
 
         const desiredControllerArgs = [moneyHackPct, moneySpacing, homeReserveRam, 25]
         const controllerArgsKey = JSON.stringify(desiredControllerArgs)
-        ensureSingletonOnHome(ns, controller, desiredControllerArgs)
+        forceSingleOnHome(ns, controller, desiredControllerArgs)
 
         if (lastPhase !== phase || lastControllerArgsKey !== controllerArgsKey) {
           ns.tprint(`[orchestrator] MONEY phase active at hack ${hackLevel}.`)
@@ -85,21 +82,14 @@ export async function main(ns) {
   }
 }
 
-function ensureSingletonOnHome(ns, script, args = []) {
+function forceSingleOnHome(ns, script, args = []) {
   if (!ns.fileExists(script, "home")) return false
 
-  const matches = ns.ps("home").filter((p) => p.filename === script)
-  let exactProc = null
-
-  for (const proc of matches) {
-    if (exactProc === null && sameArgs(proc.args, args)) {
-      exactProc = proc
-      continue
+  for (const proc of ns.ps("home")) {
+    if (proc.filename === script) {
+      try { ns.kill(proc.pid) } catch {}
     }
-    try { ns.kill(proc.pid) } catch {}
   }
-
-  if (exactProc !== null) return true
 
   return ns.run(script, 1, ...args) !== 0
 }
@@ -130,12 +120,4 @@ function killDuplicateSelf(ns) {
       try { ns.kill(proc.pid) } catch {}
     }
   }
-}
-
-function sameArgs(actual, desired) {
-  if (actual.length !== desired.length) return false
-  for (let i = 0; i < actual.length; i++) {
-    if (String(actual[i]) !== String(desired[i])) return false
-  }
-  return true
 }
