@@ -714,69 +714,72 @@ const codingContractTypesMetadata = [
       const n = data.length
       if (n === 0) return ""
 
-      function setBest(best, key, candidate) {
+      function setBest(best, key, encoded) {
         const cur = best.get(key)
         if (
-          !cur ||
-          candidate.encoded.length < cur.encoded.length ||
-          (candidate.encoded.length === cur.encoded.length && candidate.encoded < cur.encoded)
+          cur == null ||
+          encoded.length < cur.length ||
+          (encoded.length === cur.length && encoded < cur)
         ) {
-          best.set(key, candidate)
+          best.set(key, encoded)
         }
       }
 
+      function matchesBackref(pos, offset, len) {
+        for (let k = 0; k < len; k++) {
+          if (data[pos + k] !== data[pos - offset + (k % offset)]) {
+            return false
+          }
+        }
+        return true
+      }
+
+      // mode 0 = next chunk is literal
+      // mode 1 = next chunk is backreference
       const best = new Map()
-      setBest(best, "0|0", { encoded: "" })
+      setBest(best, "0|0", "")
 
       for (let pos = 0; pos <= n; pos++) {
-        for (let mode = 0; mode <= 1; mode++) {
-          const state = best.get(`${pos}|${mode}`)
-          if (!state) continue
-          if (pos === n) continue
+        const lit0 = best.get(`${pos}|0`)
+        const ref0 = best.get(`${pos}|1`)
 
-          if (mode === 0) {
+        if (lit0 != null) setBest(best, `${pos}|1`, lit0 + "0")
+        if (ref0 != null) setBest(best, `${pos}|0`, ref0 + "0")
+
+        const lit = best.get(`${pos}|0`)
+        const ref = best.get(`${pos}|1`)
+
+        if (lit != null) {
+          for (let len = 1; len <= 9 && pos + len <= n; len++) {
+            setBest(
+              best,
+              `${pos + len}|1`,
+              lit + String(len) + data.slice(pos, pos + len)
+            )
+          }
+        }
+
+        if (ref != null) {
+          for (let offset = 1; offset <= 9 && offset <= pos; offset++) {
             for (let len = 1; len <= 9 && pos + len <= n; len++) {
-              const encoded = state.encoded + String(len) + data.slice(pos, pos + len)
-              setBest(best, `${pos + len}|1`, { encoded })
+              if (!matchesBackref(pos, offset, len)) break
+              setBest(
+                best,
+                `${pos + len}|0`,
+                ref + String(len) + String(offset)
+              )
             }
-
-            setBest(best, `${pos}|1`, { encoded: state.encoded + "0" })
-          } else {
-            for (let offset = 1; offset <= 9 && offset <= pos; offset++) {
-              for (let len = 1; len <= 9 && pos + len <= n; len++) {
-                let ok = true
-                for (let k = 0; k < len; k++) {
-                  if (data[pos + k] !== data[pos - offset + k]) {
-                    ok = false
-                    break
-                  }
-                }
-                if (!ok) break
-
-                const encoded = state.encoded + String(len) + String(offset)
-                setBest(best, `${pos + len}|0`, { encoded })
-              }
-            }
-
-            setBest(best, `${pos}|0`, { encoded: state.encoded + "0" })
           }
         }
       }
 
-      let answer = null
-      for (const mode of [0, 1]) {
-        const state = best.get(`${n}|${mode}`)
-        if (!state) continue
-        if (
-          !answer ||
-          state.encoded.length < answer.length ||
-          (state.encoded.length === answer.length && state.encoded < answer)
-        ) {
-          answer = state.encoded
-        }
-      }
+      const a = best.get(`${n}|0`)
+      const b = best.get(`${n}|1`)
 
-      return answer || ""
+      if (a == null) return b || ""
+      if (b == null) return a || ""
+
+      return a.length < b.length ? a : b.length < a.length ? b : a < b ? a : b
     },
   },
 ]
