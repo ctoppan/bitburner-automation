@@ -73,6 +73,23 @@ const codingContractTypesMetadata = [
     },
   },
   {
+    name: "Total Ways to Sum II",
+    solver: function (data) {
+      const target = data[0]
+      const nums = data[1]
+      const dp = Array(target + 1).fill(0)
+      dp[0] = 1
+
+      for (const num of nums) {
+        for (let i = num; i <= target; i++) {
+          dp[i] += dp[i - num]
+        }
+      }
+
+      return dp[target]
+    },
+  },
+  {
     name: "Spiralize Matrix",
     solver: function (data) {
       const spiral = []
@@ -102,7 +119,7 @@ const codingContractTypesMetadata = [
         }
         if (--d < u) break
 
-        for (let row = d; row >= u; row--) {
+        for (let row = d; row >= u; row++) {
           spiral[k] = data[row][l]
           ++k
         }
@@ -689,6 +706,77 @@ const codingContractTypesMetadata = [
       }
 
       return out
+    },
+  },
+  {
+    name: "Compression III: LZ Compression",
+    solver: function (data) {
+      const n = data.length
+      if (n === 0) return ""
+
+      function setBest(best, key, candidate) {
+        const cur = best.get(key)
+        if (
+          !cur ||
+          candidate.encoded.length < cur.encoded.length ||
+          (candidate.encoded.length === cur.encoded.length && candidate.encoded < cur.encoded)
+        ) {
+          best.set(key, candidate)
+        }
+      }
+
+      const best = new Map()
+      setBest(best, "0|0", { encoded: "" })
+
+      for (let pos = 0; pos <= n; pos++) {
+        for (let mode = 0; mode <= 1; mode++) {
+          const state = best.get(`${pos}|${mode}`)
+          if (!state) continue
+          if (pos === n) continue
+
+          if (mode === 0) {
+            for (let len = 1; len <= 9 && pos + len <= n; len++) {
+              const encoded = state.encoded + String(len) + data.slice(pos, pos + len)
+              setBest(best, `${pos + len}|1`, { encoded })
+            }
+
+            setBest(best, `${pos}|1`, { encoded: state.encoded + "0" })
+          } else {
+            for (let offset = 1; offset <= 9 && offset <= pos; offset++) {
+              for (let len = 1; len <= 9 && pos + len <= n; len++) {
+                let ok = true
+                for (let k = 0; k < len; k++) {
+                  if (data[pos + k] !== data[pos - offset + k]) {
+                    ok = false
+                    break
+                  }
+                }
+                if (!ok) break
+
+                const encoded = state.encoded + String(len) + String(offset)
+                setBest(best, `${pos + len}|0`, { encoded })
+              }
+            }
+
+            setBest(best, `${pos}|0`, { encoded: state.encoded + "0" })
+          }
+        }
+      }
+
+      let answer = null
+      for (const mode of [0, 1]) {
+        const state = best.get(`${n}|${mode}`)
+        if (!state) continue
+        if (
+          !answer ||
+          state.encoded.length < answer.length ||
+          (state.encoded.length === answer.length && state.encoded < answer)
+        ) {
+          answer = state.encoded
+        }
+      }
+
+      return answer || ""
     },
   },
 ]
