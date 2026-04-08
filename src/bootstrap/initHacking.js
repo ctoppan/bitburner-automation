@@ -29,7 +29,7 @@ export async function main(ns) {
   await ns.sleep(1500);
 
   // README-aligned defaults
-  const orchestratorArgs = [0.03, 0.08, 1024, 30, 80, 750, 15000];
+  const orchestratorArgs = [0.03, 0.08, 1024, 30, 80, 250, 15000];
 
   if (!isRunningWithArgsOnHome(ns, orchestratorScript, orchestratorArgs)) {
     killAllInstancesOnHome(ns, orchestratorScript);
